@@ -1,0 +1,5 @@
+name: Instant Me Camera
+icon: 📷
+description: Capture a scene and edit it from a prompt and optional reference image.
+bricks:
+  - arduino:web_ui

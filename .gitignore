@@ -1,0 +1,19 @@
+# Keep this repository focused on the camera App and custom pipeline source.
+/*
+!/.gitignore
+
+!/ArduinoApps/
+/ArduinoApps/*
+!/ArduinoApps/instant-me-camera/
+!/ArduinoApps/instant-me-camera/**
+/ArduinoApps/instant-me-camera/.cache/
+/ArduinoApps/instant-me-camera/config.json
+/ArduinoApps/instant-me-camera/assets/captures/
+/ArduinoApps/instant-me-camera/python/__pycache__/
+/ArduinoApps/instant-me-camera/tools/ffmpeg
+
+!/instant-camera-ai/
+/instant-camera-ai/*
+!/instant-camera-ai/src/
+/instant-camera-ai/src/*
+!/instant-camera-ai/src/*.py

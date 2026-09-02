@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Instant Duck Camera</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="aperture">◉</span><h1>INSTANT DUCK</h1></div>
+    <div id="connection" class="connection">CONNECTING</div>
+  </header>
+  <main>
+    <section class="camera-stage">
+      <div class="viewfinder">
+        <img id="latest" alt="Latest instant photograph">
+        <div id="empty" class="empty"><span>+</span><strong>FRAME A MEMORY</strong></div>
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      </div>
+      <div class="controls">
+        <div class="status"><span id="status-dot"></span><div><small>CAMERA STATUS</small><strong id="status">READY</strong></div></div>
+        <button id="shutter" aria-label="Take photo" title="Take photo"><span></span></button>
+        <div class="backend"><small>IMAGE ENGINE</small><strong id="backend">LOCAL AI</strong></div>
+      </div>
+      <div id="progress" class="progress" aria-live="polite">
+        <div class="progress-track"><span></span></div>
+        <p id="message">Ready</p>
+        <time id="elapsed"></time>
+      </div>
+    </section>
+    <section class="settings" aria-labelledby="settings-title">
+      <div class="settings-heading">
+        <div><small>EDITOR CONTROL</small><h2 id="settings-title">SHOT SETTINGS</h2></div>
+        <span id="settings-status" aria-live="polite"></span>
+      </div>
+      <form id="settings-form">
+        <label class="prompt-field">INSTRUCTION
+          <textarea id="prompt" name="prompt" maxlength="500" rows="3" required></textarea>
+        </label>
+        <div class="reference-control">
+          <div class="reference-copy"><small>REFERENCE IMAGE</small><strong id="reference-name">NONE SELECTED</strong></div>
+          <img id="reference-preview" alt="Object reference preview">
+          <label class="reference-upload">CHOOSE IMAGE<input id="reference-input" type="file" accept="image/jpeg,image/png,image/webp"></label>
+          <button id="remove-reference" class="remove-reference" type="button" aria-label="Remove reference image" title="Remove reference image">×</button>
+        </div>
+        <div class="settings-grid">
+          <label>INPUT RESOLUTION
+            <select id="resolution" name="resolution">
+              <option value="256">256 px</option>
+              <option value="384">384 px</option>
+              <option value="512">512 px</option>
+            </select>
+          </label>
+          <label>STEPS <output id="steps-value">20</output>
+            <input id="steps" name="steps" type="range" min="4" max="30" step="1" value="20">
+          </label>
+          <label>TEXT GUIDANCE <output id="guidance-value">7.5</output>
+            <input id="guidance" name="guidance_scale" type="range" min="1" max="15" step="0.5" value="7.5">
+          </label>
+          <label>IMAGE GUIDANCE <output id="image-guidance-value">1.5</output>
+            <input id="image-guidance" name="image_guidance_scale" type="range" min="1" max="3" step="0.1" value="1.5">
+          </label>
+        </div>
+        <div class="settings-actions">
+          <label class="seed-toggle"><input id="random-seed" type="checkbox" checked><span>RANDOM SEED</span></label>
+          <label id="seed-field" class="seed-field">FIXED SEED<input id="seed" name="seed" type="number" min="0" max="2147483647" value="47" disabled></label>
+          <button id="apply-settings" type="submit">APPLY SETTINGS</button>
+        </div>
+      </form>
+    </section>
+    <section class="roll">
+      <div class="roll-heading"><h2>CAMERA ROLL</h2><span id="count">0 EXPOSURES</span></div>
+      <div id="gallery" class="gallery"></div>
+    </section>
+  </main>
+  <script src="libs/socket.io.min.js"></script>
+  <script src="libs/arduino.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
