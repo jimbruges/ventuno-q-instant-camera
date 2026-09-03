@@ -29,25 +29,42 @@ const applySettings = document.querySelector('#apply-settings');
 let startedAt = 0;
 let timer = 0;
 let settingsDirty = false;
+let pendingSettings = null;
+let captureAfterSettingsSave = false;
 
 ui.on_connect(() => { connection.textContent = 'BOARD ONLINE'; connection.classList.add('online'); ui.send_message('get_state'); });
 ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; });
 ui.on_message('camera_state', render);
-ui.on_message('settings_error', ({ message: error }) => { settingsStatus.textContent = error; settingsStatus.className = 'error'; });
-shutter.addEventListener('click', () => ui.send_message('take_photo'));
+ui.on_message('settings_error', ({ message: error }) => {
+  pendingSettings = null;
+  captureAfterSettingsSave = false;
+  settingsStatus.textContent = error;
+  settingsStatus.className = 'error';
+});
+shutter.addEventListener('click', () => {
+  if (settingsDirty) {
+    captureAfterSettingsSave = true;
+    settingsForm.requestSubmit();
+  } else if (pendingSettings) {
+    captureAfterSettingsSave = true;
+  } else {
+    ui.send_message('take_photo');
+  }
+});
 settingsForm.addEventListener('input', () => { settingsDirty = true; settingsStatus.textContent = 'UNSAVED'; settingsStatus.className = ''; updateSettingOutputs(); });
 settingsForm.addEventListener('submit', event => {
   event.preventDefault();
   settingsDirty = false;
   settingsStatus.textContent = 'SAVING';
-  ui.send_message('set_settings', {
+  pendingSettings = {
     prompt: promptInput.value,
     resolution: Number(resolutionInput.value),
     steps: Number(stepsInput.value),
     guidance_scale: Number(guidanceInput.value),
     image_guidance_scale: Number(imageGuidanceInput.value),
     seed: randomSeedInput.checked ? null : Number(seedInput.value),
-  });
+  };
+  ui.send_message('set_settings', pendingSettings);
 });
 randomSeedInput.addEventListener('change', updateSeedControl);
 referenceInput.addEventListener('change', () => {
@@ -129,6 +146,13 @@ function render(state) {
     updateSeedControl();
     updateSettingOutputs();
   }
+  if (pendingSettings && settingsMatch(state.settings, pendingSettings)) {
+    pendingSettings = null;
+    if (captureAfterSettingsSave) {
+      captureAfterSettingsSave = false;
+      ui.send_message('take_photo');
+    }
+  }
   const hasReference = Boolean(state.npu_reference);
   referencePreview.style.display = hasReference ? 'block' : 'none';
   removeReference.style.display = hasReference ? 'block' : 'none';
@@ -149,4 +173,14 @@ function updateSettingOutputs() {
 function updateSeedControl() {
   seedInput.disabled = randomSeedInput.checked;
   seedField.classList.toggle('inactive', randomSeedInput.checked);
+}
+
+function settingsMatch(actual, expected) {
+  return actual
+    && actual.prompt === expected.prompt
+    && actual.resolution === expected.resolution
+    && actual.steps === expected.steps
+    && actual.guidance_scale === expected.guidance_scale
+    && actual.image_guidance_scale === expected.image_guidance_scale
+    && actual.seed === expected.seed;
 }
