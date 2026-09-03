@@ -17,6 +17,9 @@ from transformers import CLIPTextModel, CLIPTokenizer
 MODEL_DIR = Path.home() / "instant-camera-ai" / "models" / "instruct-pix2pix"
 ADAPTER_DIR = Path.home() / "instant-camera-ai" / "models" / "ip-adapter-plus-sd15"
 BUILD_DIR = Path.home() / "instant-camera-ai" / "build" / "ip-adapter-pix2pix"
+BATCHED_BUILD_DIR = (
+    Path.home() / "instant-camera-ai" / "build" / "ip-adapter-pix2pix-batched"
+)
 TARGET_DEVICE = "Arduino VENTUNO Q"
 
 
@@ -129,17 +132,17 @@ def prepare_reference():
     )
 
 
-def prepare_unet():
+def prepare_unet(batch_size=1, build_dir=BUILD_DIR):
     pipe = load_pipeline()
     export_model(
         AdapterEditorUnet(pipe.unet),
         (
-            torch.zeros(1, 8, 64, 64),
-            torch.zeros(1),
-            torch.zeros(1, 77, 768),
-            torch.zeros(1, 1, 257, 1280),
+            torch.zeros(batch_size, 8, 64, 64),
+            torch.zeros(batch_size),
+            torch.zeros(batch_size, 77, 768),
+            torch.zeros(batch_size, 1, 257, 1280),
         ),
-        BUILD_DIR / "adapter_unet.onnx",
+        build_dir / "adapter_unet.onnx",
         [
             "sample",
             "timestep",
@@ -149,8 +152,12 @@ def prepare_unet():
         "noise_prediction",
     )
     consolidate_external_data(
-        BUILD_DIR / "adapter_unet.onnx", BUILD_DIR / "adapter_unet_source.onnx"
+        build_dir / "adapter_unet.onnx", build_dir / "adapter_unet_source.onnx"
     )
+
+
+def prepare_batched_unet():
+    prepare_unet(batch_size=3, build_dir=BATCHED_BUILD_DIR)
 
 
 def prepare():
@@ -158,22 +165,24 @@ def prepare():
     prepare_unet()
 
 
-def submit(components=("reference_encoder", "adapter_unet")):
+def submit(components=("reference_encoder", "adapter_unet"), build_dir=BUILD_DIR):
     client = hub.Client()
     device = hub.Device(TARGET_DEVICE)
     options = "--target_runtime qnn_context_binary --qnn_options default_graph_htp_precision=FLOAT16"
-    jobs_path = BUILD_DIR / "compile_jobs.json"
+    jobs_path = build_dir / "compile_jobs.json"
     jobs = json.loads(jobs_path.read_text()) if jobs_path.exists() else {}
     for name, model in (
-        ("reference_encoder", BUILD_DIR / "reference_encoder.onnx"),
-        ("adapter_unet", BUILD_DIR / "adapter_unet_source.onnx"),
+        ("reference_encoder", build_dir / "reference_encoder.onnx"),
+        ("adapter_unet", build_dir / "adapter_unet_source.onnx"),
     ):
         if name not in components:
             continue
         job = client.submit_compile_job(
             model=model,
             device=device,
-            name=f"instruct-pix2pix-ip-adapter-plus-{name}-fp16",
+            name=f"instruct-pix2pix-ip-adapter-plus-{name}-batch3-fp16"
+            if build_dir == BATCHED_BUILD_DIR
+            else f"instruct-pix2pix-ip-adapter-plus-{name}-fp16",
             options=options,
         )
         jobs[name] = job.job_id
@@ -189,8 +198,10 @@ def main():
             "prepare",
             "prepare-reference",
             "prepare-unet",
+            "prepare-batched-unet",
             "submit",
             "submit-unet",
+            "submit-batched-unet",
         ),
     )
     args = parser.parse_args()
@@ -200,10 +211,14 @@ def main():
         prepare_reference()
     elif args.command == "prepare-unet":
         prepare_unet()
+    elif args.command == "prepare-batched-unet":
+        prepare_batched_unet()
     elif args.command == "submit":
         submit()
     elif args.command == "submit-unet":
         submit(("adapter_unet",))
+    elif args.command == "submit-batched-unet":
+        submit(("adapter_unet",), BATCHED_BUILD_DIR)
 
 
 if __name__ == "__main__":

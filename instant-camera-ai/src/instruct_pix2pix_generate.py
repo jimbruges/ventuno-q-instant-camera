@@ -181,6 +181,11 @@ class InstructPix2PixIpAdapterQnn(InstructPix2PixQnn):
         self.editor_unet = self._load_float_session(
             adapter_model_dir / "adapter_unet" / "model.onnx"
         )
+        self.editor_unet_batch = self.editor_unet.get_inputs()[0].shape[0]
+        if self.editor_unet_batch not in (1, 3):
+            raise ValueError(
+                f"Adapter U-Net batch must be 1 or 3, got {self.editor_unet_batch}"
+            )
         self._negative_reference_embedding = None
 
     @staticmethod
@@ -235,28 +240,59 @@ class InstructPix2PixIpAdapterQnn(InstructPix2PixQnn):
         for step_index, timestep in enumerate(scheduler.timesteps):
             scaled_latents = scheduler.scale_model_input(latents, step_index)
             time_input = np.array([timestep], dtype=np.float32)
-            common = {"timestep": time_input}
-            noise_text = self._run_float(
-                self.editor_unet,
-                sample=np.concatenate((scaled_latents, image_latents), axis=1),
-                text_embedding=conditional,
-                reference_embedding=positive_reference,
-                **common,
-            )
-            noise_image = self._run_float(
-                self.editor_unet,
-                sample=np.concatenate((scaled_latents, image_latents), axis=1),
-                text_embedding=unconditional,
-                reference_embedding=negative_reference,
-                **common,
-            )
-            noise_unconditional = self._run_float(
-                self.editor_unet,
-                sample=np.concatenate((scaled_latents, zero_image_latents), axis=1),
-                text_embedding=unconditional,
-                reference_embedding=negative_reference,
-                **common,
-            )
+            if self.editor_unet_batch == 3:
+                latent_with_image = np.concatenate(
+                    (scaled_latents, image_latents), axis=1
+                )
+                noise = self._run_float(
+                    self.editor_unet,
+                    sample=np.concatenate(
+                        (
+                            latent_with_image,
+                            latent_with_image,
+                            np.concatenate(
+                                (scaled_latents, zero_image_latents), axis=1
+                            ),
+                        )
+                    ),
+                    timestep=np.repeat(time_input, 3),
+                    text_embedding=np.concatenate(
+                        (conditional, unconditional, unconditional)
+                    ),
+                    reference_embedding=np.concatenate(
+                        (
+                            positive_reference,
+                            negative_reference,
+                            negative_reference,
+                        )
+                    ),
+                )
+                noise_text, noise_image, noise_unconditional = np.split(
+                    noise, 3, axis=0
+                )
+            else:
+                common = {"timestep": time_input}
+                noise_text = self._run_float(
+                    self.editor_unet,
+                    sample=np.concatenate((scaled_latents, image_latents), axis=1),
+                    text_embedding=conditional,
+                    reference_embedding=positive_reference,
+                    **common,
+                )
+                noise_image = self._run_float(
+                    self.editor_unet,
+                    sample=np.concatenate((scaled_latents, image_latents), axis=1),
+                    text_embedding=unconditional,
+                    reference_embedding=negative_reference,
+                    **common,
+                )
+                noise_unconditional = self._run_float(
+                    self.editor_unet,
+                    sample=np.concatenate((scaled_latents, zero_image_latents), axis=1),
+                    text_embedding=unconditional,
+                    reference_embedding=negative_reference,
+                    **common,
+                )
             guided_noise = (
                 noise_unconditional
                 + guidance_scale * (noise_text - noise_image)
