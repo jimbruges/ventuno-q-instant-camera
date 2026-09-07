@@ -13,6 +13,8 @@ from diffusers import (
 )
 from transformers import CLIPTextModel, CLIPTokenizer
 
+from export_instruct_pix2pix import VaeDecoder, VaeEncoder
+
 
 MODEL_DIR = Path.home() / "instant-camera-ai" / "models" / "instruct-pix2pix"
 ADAPTER_DIR = Path.home() / "instant-camera-ai" / "models" / "ip-adapter-plus-sd15"
@@ -55,7 +57,7 @@ class AdapterEditorUnet(torch.nn.Module):
         )[0].float()
 
 
-def load_pipeline():
+def load_pipeline(hyper_lora=None):
     pipe = StableDiffusionInstructPix2PixPipeline(
         vae=AutoencoderKL.from_pretrained(
             MODEL_DIR, subfolder="vae", variant="fp16", torch_dtype=torch.float16
@@ -86,6 +88,14 @@ def load_pipeline():
         low_cpu_mem_usage=True,
     )
     pipe.set_ip_adapter_scale(0.8)
+    if hyper_lora:
+        hyper_lora = Path(hyper_lora)
+        pipe.load_lora_weights(
+            hyper_lora.parent,
+            weight_name=hyper_lora.name,
+            adapter_name="hyper",
+        )
+        pipe.fuse_lora(adapter_names=["hyper"])
     return pipe
 
 
@@ -132,12 +142,13 @@ def prepare_reference():
     )
 
 
-def prepare_unet(batch_size=1, build_dir=BUILD_DIR):
-    pipe = load_pipeline()
+def prepare_unet(batch_size=1, build_dir=BUILD_DIR, resolution=512, hyper_lora=None):
+    pipe = load_pipeline(hyper_lora)
+    latent_size = resolution // 8
     export_model(
         AdapterEditorUnet(pipe.unet),
         (
-            torch.zeros(batch_size, 8, 64, 64),
+            torch.zeros(batch_size, 8, latent_size, latent_size),
             torch.zeros(batch_size),
             torch.zeros(batch_size, 77, 768),
             torch.zeros(batch_size, 1, 257, 1280),
@@ -153,6 +164,57 @@ def prepare_unet(batch_size=1, build_dir=BUILD_DIR):
     )
     consolidate_external_data(
         build_dir / "adapter_unet.onnx", build_dir / "adapter_unet_source.onnx"
+    )
+
+
+def prepare_vae(build_dir, resolution):
+    vae = AutoencoderKL.from_pretrained(
+        MODEL_DIR, subfolder="vae", variant="fp16", torch_dtype=torch.float16
+    )
+    latent_size = resolution // 8
+    export_model(
+        VaeEncoder(vae),
+        (torch.zeros(1, 3, resolution, resolution),),
+        build_dir / "vae_encoder.onnx",
+        ["image"],
+        "latent",
+    )
+    consolidate_external_data(
+        build_dir / "vae_encoder.onnx", build_dir / "vae_encoder_source.onnx"
+    )
+    export_model(
+        VaeDecoder(vae),
+        (torch.zeros(1, 4, latent_size, latent_size),),
+        build_dir / "vae_decoder.onnx",
+        ["latent"],
+        "image",
+    )
+    consolidate_external_data(
+        build_dir / "vae_decoder.onnx", build_dir / "vae_decoder_source.onnx"
+    )
+
+
+def prepare_variant(build_dir, resolution, hyper_lora=None, include_vae=True):
+    if resolution <= 0 or resolution % 8:
+        raise ValueError("resolution must be a positive multiple of 8")
+    prepare_unet(
+        build_dir=build_dir,
+        resolution=resolution,
+        hyper_lora=hyper_lora,
+    )
+    if include_vae:
+        prepare_vae(build_dir, resolution)
+    (build_dir / "variant.json").write_text(
+        json.dumps(
+            {
+                "resolution": resolution,
+                "scheduler": "ddim_trailing" if hyper_lora else "euler_ancestral",
+                "recommended_steps": 4 if hyper_lora else 20,
+                "hyper_lora": Path(hyper_lora).name if hyper_lora else None,
+            },
+            indent=2,
+        )
+        + "\n"
     )
 
 
@@ -174,15 +236,15 @@ def submit(components=("reference_encoder", "adapter_unet"), build_dir=BUILD_DIR
     for name, model in (
         ("reference_encoder", build_dir / "reference_encoder.onnx"),
         ("adapter_unet", build_dir / "adapter_unet_source.onnx"),
+        ("vae_encoder", build_dir / "vae_encoder_source.onnx"),
+        ("vae_decoder", build_dir / "vae_decoder_source.onnx"),
     ):
         if name not in components:
             continue
         job = client.submit_compile_job(
             model=model,
             device=device,
-            name=f"instruct-pix2pix-ip-adapter-plus-{name}-batch3-fp16"
-            if build_dir == BATCHED_BUILD_DIR
-            else f"instruct-pix2pix-ip-adapter-plus-{name}-fp16",
+            name=f"instruct-pix2pix-ip-adapter-plus-{build_dir.name}-{name}-fp16",
             options=options,
         )
         jobs[name] = job.job_id
@@ -202,8 +264,14 @@ def main():
             "submit",
             "submit-unet",
             "submit-batched-unet",
+            "prepare-variant",
+            "submit-variant",
         ),
     )
+    parser.add_argument("--build-dir", type=Path)
+    parser.add_argument("--resolution", type=int, default=512)
+    parser.add_argument("--hyper-lora", type=Path)
+    parser.add_argument("--skip-vae", action="store_true")
     args = parser.parse_args()
     if args.command == "prepare":
         prepare()
@@ -219,6 +287,22 @@ def main():
         submit(("adapter_unet",))
     elif args.command == "submit-batched-unet":
         submit(("adapter_unet",), BATCHED_BUILD_DIR)
+    elif args.command == "prepare-variant":
+        if not args.build_dir:
+            parser.error("--build-dir is required for prepare-variant")
+        prepare_variant(
+            args.build_dir,
+            args.resolution,
+            args.hyper_lora,
+            include_vae=not args.skip_vae,
+        )
+    elif args.command == "submit-variant":
+        if not args.build_dir:
+            parser.error("--build-dir is required for submit-variant")
+        components = ("adapter_unet",)
+        if not args.skip_vae:
+            components += ("vae_encoder", "vae_decoder")
+        submit(components, args.build_dir)
 
 
 if __name__ == "__main__":

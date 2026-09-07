@@ -1,4 +1,5 @@
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -52,6 +53,41 @@ class EulerAncestralScheduler:
         return previous.astype(np.float32, copy=False)
 
 
+class DdimTrailingScheduler:
+    def __init__(self, steps):
+        betas = np.linspace(0.00085**0.5, 0.012**0.5, 1000) ** 2
+        self.alphas_cumprod = np.cumprod(1.0 - betas)
+        step_ratio = 1000.0 / steps
+        self.timesteps = (
+            np.round(np.arange(1000, 0, -step_ratio)).astype(np.int64) - 1
+        )
+        self.step_ratio = 1000 // steps
+
+    @property
+    def init_noise_sigma(self):
+        return 1.0
+
+    def scale_model_input(self, sample, step_index):
+        return sample
+
+    def step(self, noise_prediction, step_index, sample, generator):
+        timestep = int(self.timesteps[step_index])
+        previous_timestep = timestep - self.step_ratio
+        alpha = float(self.alphas_cumprod[timestep])
+        previous_alpha = (
+            float(self.alphas_cumprod[previous_timestep])
+            if previous_timestep >= 0
+            else float(self.alphas_cumprod[0])
+        )
+        predicted_original = (
+            sample - np.sqrt(1.0 - alpha) * noise_prediction
+        ) / np.sqrt(alpha)
+        direction = np.sqrt(1.0 - previous_alpha) * noise_prediction
+        return (
+            np.sqrt(previous_alpha) * predicted_original + direction
+        ).astype(np.float32, copy=False)
+
+
 class InstructPix2PixQnn(StableDiffusionQnn):
     def __init__(self, base_model_dir=DEFAULT_MODEL_DIR, editor_model_dir=DEFAULT_EDITOR_MODEL_DIR):
         super().__init__(base_model_dir, components=("text_encoder", "vae"))
@@ -59,6 +95,7 @@ class InstructPix2PixQnn(StableDiffusionQnn):
         self.vae_encoder = self._load_float_session(
             editor_model_dir / "vae_encoder" / "model.onnx"
         )
+        self.image_size = self.vae_encoder.get_inputs()[0].shape[-1]
         self.editor_unet = self._load_float_session(
             editor_model_dir / "editor_unet" / "model.onnx"
         )
@@ -80,21 +117,20 @@ class InstructPix2PixQnn(StableDiffusionQnn):
         outputs = session.run(None, feed)
         return outputs[0] if len(outputs) == 1 else tuple(outputs)
 
-    @staticmethod
-    def _prepare_source(source):
+    def _prepare_source(self, source):
         image = source.convert("RGB")
         original_size = image.size
-        scale = min(512 / image.width, 512 / image.height)
+        scale = min(self.image_size / image.width, self.image_size / image.height)
         resized_size = (round(image.width * scale), round(image.height * scale))
         image = image.resize(resized_size, Image.Resampling.LANCZOS)
         pixels = np.asarray(image, dtype=np.float32)
-        pad_left = (512 - resized_size[0]) // 2
-        pad_top = (512 - resized_size[1]) // 2
+        pad_left = (self.image_size - resized_size[0]) // 2
+        pad_top = (self.image_size - resized_size[1]) // 2
         pixels = np.pad(
             pixels,
             (
-                (pad_top, 512 - resized_size[1] - pad_top),
-                (pad_left, 512 - resized_size[0] - pad_left),
+                (pad_top, self.image_size - resized_size[1] - pad_top),
+                (pad_left, self.image_size - resized_size[0] - pad_left),
                 (0, 0),
             ),
             mode="edge",
@@ -167,16 +203,45 @@ class InstructPix2PixIpAdapterQnn(InstructPix2PixQnn):
         editor_model_dir=DEFAULT_EDITOR_MODEL_DIR,
         adapter_model_dir=DEFAULT_ADAPTER_MODEL_DIR,
     ):
+        adapter_model_dir = Path(adapter_model_dir)
+        variant_vae_decoder = adapter_model_dir / "vae_decoder" / "model.onnx"
         StableDiffusionQnn.__init__(
-            self, base_model_dir, components=("text_encoder", "vae")
+            self,
+            base_model_dir,
+            components=("text_encoder",)
+            if variant_vae_decoder.is_file()
+            else ("text_encoder", "vae"),
         )
         editor_model_dir = Path(editor_model_dir)
+        variant_vae_encoder = adapter_model_dir / "vae_encoder" / "model.onnx"
         self.vae_encoder = self._load_float_session(
-            editor_model_dir / "vae_encoder" / "model.onnx"
+            variant_vae_encoder
+            if variant_vae_encoder.is_file()
+            else editor_model_dir / "vae_encoder" / "model.onnx"
         )
-        adapter_model_dir = Path(adapter_model_dir)
-        self.reference_encoder = self._load_float_session(
+        self.image_size = self.vae_encoder.get_inputs()[0].shape[-1]
+        self.vae_decoder = (
+            self._load_float_session(variant_vae_decoder)
+            if variant_vae_decoder.is_file()
+            else None
+        )
+        variant_config = adapter_model_dir / "variant.json"
+        self.scheduler_type = (
+            json.loads(variant_config.read_text()).get(
+                "scheduler", "euler_ancestral"
+            )
+            if variant_config.is_file()
+            else "euler_ancestral"
+        )
+        if self.scheduler_type not in ("euler_ancestral", "ddim_trailing"):
+            raise ValueError(f"Unsupported scheduler: {self.scheduler_type}")
+        variant_reference_encoder = (
             adapter_model_dir / "reference_encoder" / "model.onnx"
+        )
+        self.reference_encoder = self._load_float_session(
+            variant_reference_encoder
+            if variant_reference_encoder.is_file()
+            else DEFAULT_ADAPTER_MODEL_DIR / "reference_encoder" / "model.onnx"
         )
         self.editor_unet = self._load_float_session(
             adapter_model_dir / "adapter_unet" / "model.onnx"
@@ -232,9 +297,14 @@ class InstructPix2PixIpAdapterQnn(InstructPix2PixQnn):
         conditional, unconditional = self.encode_prompt(prompt)
         positive_reference, negative_reference = self._reference_embeddings(reference)
 
-        scheduler = EulerAncestralScheduler(steps)
+        scheduler = (
+            DdimTrailingScheduler(steps)
+            if self.scheduler_type == "ddim_trailing"
+            else EulerAncestralScheduler(steps)
+        )
         generator = np.random.default_rng(seed)
-        latents = generator.standard_normal((1, 4, 64, 64), dtype=np.float32)
+        latent_shape = image_latents.shape
+        latents = generator.standard_normal(latent_shape, dtype=np.float32)
         latents *= scheduler.init_noise_sigma
 
         for step_index, timestep in enumerate(scheduler.timesteps):
@@ -301,7 +371,32 @@ class InstructPix2PixIpAdapterQnn(InstructPix2PixQnn):
             latents = scheduler.step(guided_noise, step_index, latents, generator)
             print(f"Adapter edit step {step_index + 1}/{steps}", flush=True)
 
-        image = self._run(self.vae, np.transpose(latents, (0, 2, 3, 1)))
+        if self.vae_decoder:
+            image = self._run_float(self.vae_decoder, latent=latents)
+            image = np.transpose(image, (0, 2, 3, 1))
+        else:
+            decoder_size = self.vae.session.get_inputs()[0].shape[1]
+            latent_padding = decoder_size - latents.shape[-1]
+            if latent_padding < 0 or latent_padding % 2:
+                raise ValueError(
+                    f"Cannot decode {latents.shape[-1]}x{latents.shape[-1]} latents "
+                    f"with a {decoder_size}x{decoder_size} VAE"
+                )
+            padding = latent_padding // 2
+            if padding:
+                latents = np.pad(
+                    latents,
+                    ((0, 0), (0, 0), (padding, padding), (padding, padding)),
+                )
+            image = self._run(self.vae, np.transpose(latents, (0, 2, 3, 1)))
+            if padding:
+                pixel_padding = padding * 8
+                image = image[
+                    :,
+                    pixel_padding:-pixel_padding,
+                    pixel_padding:-pixel_padding,
+                    :,
+                ]
         image = Image.fromarray(np.clip(image[0] * 255.0, 0, 255).astype(np.uint8))
         image = image.crop(crop).resize(original_size, Image.Resampling.LANCZOS)
         print(f"Adapter edit completed in {time.perf_counter() - started:.2f}s", flush=True)
