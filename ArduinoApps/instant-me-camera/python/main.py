@@ -3,11 +3,13 @@ import io
 import json
 import os
 import queue
+import socket
 import shutil
 import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +17,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App, Bridge, Logger
+from receipt_effects import receipt_raster, send_to_printer
 
 
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -25,18 +28,23 @@ NPU_REFERENCE_PATH = ASSETS_DIR / "reference" / "object.jpg"
 CONFIG_PATH = APP_DIR / "config.json"
 DEFAULT_PROMPT = "same room, candid realistic instant camera photograph, one large yellow rubber duck centered on the floor in the masked area"
 DEFAULT_NPU_PROMPT = "Please replace the just the head of any human in this image with a large rubber duck. Preserve every person, their clothes, the room, lighting, and camera angle."
+DEFAULT_CLOUD_PROMPT = "Place the person from the second reference image naturally into the scene in the first image. Keep their face, body, clothes, and identity recognizable. If people are present, pose them together; otherwise place the person naturally in the background. Preserve the scene, lighting, camera angle, and realistic photographic style."
 OUTPUT_WIDTH = 200
+MODE_NAMES = {"normal": 0, "cloud": 1, "local": 2}
 
 logger = Logger("InstantMeCamera")
 ui = WebUI()
 jobs = queue.Queue(maxsize=1)
 state_lock = threading.Lock()
+printer_lock = threading.Lock()
 state = {
     "status": "ready",
     "message": "Ready",
     "backend": "preview",
     "camera": "/dev/video0",
     "busy": False,
+    "active_mode": None,
+    "availability": {"normal": False, "cloud": False, "local": False},
     "photos": [],
 }
 
@@ -64,6 +72,7 @@ def load_config():
         "npu_guidance_scale": float(os.getenv("NPU_GUIDANCE_SCALE", "7.5")),
         "npu_image_guidance_scale": float(os.getenv("NPU_IMAGE_GUIDANCE_SCALE", "1.5")),
         "npu_seed": None,
+        "cloud_prompt": os.getenv("CLOUD_PROMPT", DEFAULT_CLOUD_PROMPT),
         "identity_prompt": os.getenv("IDENTITY_PROMPT", "candid instant camera photograph, a man img naturally joining the people in the scene"),
         "sd_cli": os.getenv("SD_CLI", str(Path.home() / "instant-camera-ai" / "bin" / "sd-cli")),
         "sd_model": os.getenv("SD_MODEL", str(Path.home() / "instant-camera-ai" / "models" / "realistic-vision-v5.1.safetensors")),
@@ -74,7 +83,17 @@ def load_config():
         "generation_steps": int(os.getenv("GENERATION_STEPS", "4")),
         "generation_strength": float(os.getenv("GENERATION_STRENGTH", "0.78")),
         "camera_rotation": int(os.getenv("CAMERA_ROTATION", "0")),
-        "openrouter_model": os.getenv("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image-preview"),
+        "openrouter_model": os.getenv("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image"),
+        "camera_brightness": float(os.getenv("CAMERA_BRIGHTNESS", "0")),
+        "camera_contrast": float(os.getenv("CAMERA_CONTRAST", "1")),
+        "printer_enabled": os.getenv("PRINTER_ENABLED", "true").lower() not in {"0", "false", "no"},
+        "printer_threshold": int(os.getenv("PRINTER_THRESHOLD", "125")),
+        "printer_feed_lines": int(os.getenv("PRINTER_FEED_LINES", "3")),
+        "printer_heat_dots": int(os.getenv("PRINTER_HEAT_DOTS", "11")),
+        "printer_heat_time": int(os.getenv("PRINTER_HEAT_TIME", "120")),
+        "printer_heat_interval": int(os.getenv("PRINTER_HEAT_INTERVAL", "40")),
+        "printer_density": int(os.getenv("PRINTER_DENSITY", "10")),
+        "printer_break_time": int(os.getenv("PRINTER_BREAK_TIME", "2")),
     }
     if CONFIG_PATH.exists():
         config.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
@@ -90,10 +109,14 @@ def photo_records():
     records = []
     for path in sorted(CAPTURES_DIR.glob("*-final.png"), reverse=True):
         stem = path.name.removesuffix("-final.png")
+        parts = stem.rsplit("-", 1)
+        mode = parts[1] if len(parts) == 2 and parts[1] in MODE_NAMES else "legacy"
         records.append({
             "id": stem,
             "image": f"captures/{path.name}",
             "original": f"captures/{stem}-original.jpg",
+            "print": f"captures/{stem}-print.png" if (CAPTURES_DIR / f"{stem}-print.png").exists() else None,
+            "mode": mode,
             "created": datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(),
         })
     return records[:24]
@@ -111,12 +134,25 @@ def snapshot_state():
         )
         result["settings"] = {
             "prompt": config["npu_prompt"],
+            "cloud_prompt": config["cloud_prompt"],
+            "openrouter_model": config["openrouter_model"],
             "resolution": config["generation_width"],
             "steps": config["npu_steps"],
             "guidance_scale": config["npu_guidance_scale"],
             "image_guidance_scale": config["npu_image_guidance_scale"],
             "seed": config["npu_seed"],
+            "camera_brightness": config["camera_brightness"],
+            "camera_contrast": config["camera_contrast"],
+            "printer_enabled": config["printer_enabled"],
+            "printer_threshold": config["printer_threshold"],
+            "printer_feed_lines": config["printer_feed_lines"],
+            "printer_heat_dots": config["printer_heat_dots"],
+            "printer_heat_time": config["printer_heat_time"],
+            "printer_heat_interval": config["printer_heat_interval"],
+            "printer_density": config["printer_density"],
+            "printer_break_time": config["printer_break_time"],
         }
+        result["openrouter_key_ready"] = bool(os.getenv("OPENROUTER_API_KEY"))
         required = []
         if config["backend"] == "local":
             required.extend([config["sd_cli"], config["sd_model"], config["sd_lora"]])
@@ -144,7 +180,9 @@ def capture_frame(destination):
     ffmpeg_args = [
         "-hide_banner", "-loglevel", "error", "-y",
         "-f", "v4l2", "-input_format", "mjpeg", "-video_size", "640x480",
-        "-i", config["camera"], "-frames:v", "1", str(destination),
+        "-i", config["camera"],
+        "-vf", f"eq=brightness={config['camera_brightness']}:contrast={config['camera_contrast']}",
+        "-frames:v", "1", str(destination),
     ]
     if bundled_ffmpeg.is_file():
         command = [str(bundled_ffmpeg), *ffmpeg_args]
@@ -269,8 +307,9 @@ def generate_openrouter(scene, output):
     payload = {
         "model": config["openrouter_model"],
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": config["prompt"] + ". Preserve the source image's colors and aspect ratio."},
+            {"type": "text", "text": config["cloud_prompt"]},
             {"type": "image_url", "image_url": {"url": encode_data_url(scene)}},
+            {"type": "image_url", "image_url": {"url": encode_data_url(REFERENCE_PATH)}},
         ]}],
         "modalities": ["image", "text"],
     }
@@ -322,59 +361,101 @@ def finish_image(generated, output):
         final.save(output, optimize=True)
 
 
-def process_capture(source="hardware"):
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    original = CAPTURES_DIR / f"{stamp}-original.jpg"
-    scene = CAPTURES_DIR / f"{stamp}-scene.jpg"
-    generated = CAPTURES_DIR / f"{stamp}-generated.png"
-    final = CAPTURES_DIR / f"{stamp}-final.png"
+def create_print_raster(image_path, output_path):
+    with Image.open(image_path) as image:
+        raster = receipt_raster(image, 384, config["printer_threshold"])
+    raster.save(output_path, optimize=True)
+    return raster
+
+
+def print_raster(raster):
+    with printer_lock:
+        configure_printer()
+        send_to_printer(raster, Bridge, config["printer_feed_lines"])
+
+
+def configure_printer():
+    accepted = Bridge.call(
+        "print_configure",
+        config["printer_heat_dots"],
+        config["printer_heat_time"],
+        config["printer_heat_interval"],
+        config["printer_density"],
+        config["printer_break_time"],
+    )
+    if accepted is not True:
+        raise RuntimeError("Printer rejected its heat or density settings")
+
+
+def set_active_mode(mode):
+    with state_lock:
+        state["active_mode"] = mode
     try:
+        Bridge.notify("set_active_mode", MODE_NAMES.get(mode, -1))
+    except Exception as exc:
+        logger.info(f"Button mode update skipped: {exc}")
+
+
+def process_capture(mode="normal", source="hardware"):
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    stem = f"{stamp}-{mode}"
+    original = CAPTURES_DIR / f"{stem}-original.jpg"
+    scene = CAPTURES_DIR / f"{stem}-scene.jpg"
+    generated = CAPTURES_DIR / f"{stem}-generated.png"
+    final = CAPTURES_DIR / f"{stem}-final.png"
+    print_image = CAPTURES_DIR / f"{stem}-print.png"
+    try:
+        if mode not in MODE_NAMES:
+            raise RuntimeError(f"Unknown capture mode: {mode}")
+        if not state["availability"].get(mode, False):
+            raise RuntimeError(f"{mode.title()} mode is not currently available")
+        set_active_mode(mode)
         publish("countdown", f"Picture requested from {source}", True)
         time.sleep(0.6)
         publish("capture", "Capturing scene", True)
         capture_frame(original)
         prepare_scene(original, scene)
-        if config["backend"] == "identity":
-            subject = "the reference person"
-        elif config["backend"] == "npu" and NPU_REFERENCE_PATH.exists():
-            subject = "the reference subject"
+        if mode == "normal":
+            publish("generating", "Preparing the normal photo", True)
+            shutil.copyfile(scene, generated)
+        elif mode == "cloud":
+            publish("generating", "Composing with Nano Banana", True)
+            generate_openrouter(scene, generated)
         else:
-            subject = "a rubber duck"
-        publish("generating", f"Adding {subject} with {config['backend']}", True)
-        generators = {
-            "npu": generate_npu,
-            "local": generate_local,
-            "identity": generate_identity,
-            "openrouter": generate_openrouter,
-            "preview": generate_preview,
-        }
-        if config["backend"] not in generators:
-            raise RuntimeError(f"Unknown backend: {config['backend']}")
-        generators[config["backend"]](scene, generated)
+            publish("generating", "Applying the local AI effect", True)
+            generate_npu(scene, generated)
         finish_image(generated, final)
+        raster = create_print_raster(generated, print_image)
         scene.unlink(missing_ok=True)
         generated.unlink(missing_ok=True)
+        if config["printer_enabled"]:
+            publish("printing", "Printing your instant photo", True)
+            print_raster(raster)
         publish("done", "Your instant photo is ready", False)
         time.sleep(1.5)
         publish("ready", "Ready", False)
     except Exception as exc:
         logger.error(str(exc))
         publish("error", str(exc), False)
+        time.sleep(2)
+        publish("ready", "Ready", False)
+    finally:
+        set_active_mode(None)
 
 
 def worker():
     while True:
-        source = jobs.get()
-        process_capture(source)
+        mode, source = jobs.get()
+        process_capture(mode, source)
         jobs.task_done()
 
 
-def request_capture(source):
+def request_capture(mode, source):
     with state_lock:
         if state["busy"]:
             return False
         try:
-            jobs.put_nowait(source)
+            jobs.put_nowait((mode, source))
             state["busy"] = True
             return True
         except queue.Full:
@@ -382,13 +463,55 @@ def request_capture(source):
             return False
 
 
-def on_hardware_shutter(*_args):
-    request_capture("Modulino button")
+def on_hardware_shutter(mode="normal"):
+    request_capture(str(mode), "Modulino button")
 
 
-def on_ui_capture(_client, _data):
-    request_capture("web shutter")
+def on_ui_capture(_client, data):
+    request_capture(str((data or {}).get("mode", "normal")), "web control")
     ui.send_message("camera_state", snapshot_state())
+
+
+def on_test_print(client, _data):
+    try:
+        with state_lock:
+            if state["busy"]:
+                raise ValueError("Printer test cannot run while a photo is processing")
+        publish("printing", "Printing diagnostic ticket", True)
+        with printer_lock:
+            configure_printer()
+            if Bridge.call("print_test") is not True:
+                raise ValueError("Printer rejected the test")
+        publish("done", "Diagnostic ticket printed", False)
+        time.sleep(1)
+        publish("ready", "Ready", False)
+    except (RuntimeError, ValueError) as exc:
+        publish("error", str(exc), False)
+        ui.send_message("settings_error", {"message": str(exc)}, client)
+        time.sleep(2)
+        publish("ready", "Ready", False)
+
+
+def on_reprint(client, data):
+    try:
+        with state_lock:
+            if state["busy"]:
+                raise ValueError("Reprint cannot run while another job is processing")
+        photo_id = Path(str(data.get("id", ""))).name
+        print_path = CAPTURES_DIR / f"{photo_id}-print.png"
+        if not print_path.is_file():
+            raise ValueError("That print is no longer available")
+        publish("printing", "Reprinting archived photo", True)
+        with Image.open(print_path) as image:
+            print_raster(image.convert("1"))
+        publish("done", "Archived photo reprinted", False)
+        time.sleep(1)
+        publish("ready", "Ready", False)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        publish("error", str(exc), False)
+        ui.send_message("settings_error", {"message": str(exc)}, client)
+        time.sleep(2)
+        publish("ready", "Ready", False)
 
 
 def on_get_state(client, _data):
@@ -398,14 +521,30 @@ def on_get_state(client, _data):
 def on_set_settings(client, data):
     try:
         prompt = str(data.get("prompt", "")).strip()
+        cloud_prompt = str(data.get("cloud_prompt", "")).strip()
+        openrouter_model = str(data.get("openrouter_model", "")).strip()
         resolution = int(data.get("resolution"))
         steps = int(data.get("steps"))
         guidance_scale = float(data.get("guidance_scale"))
         image_guidance_scale = float(data.get("image_guidance_scale"))
         seed_value = data.get("seed")
         seed = None if seed_value in (None, "") else int(seed_value)
+        camera_brightness = float(data.get("camera_brightness"))
+        camera_contrast = float(data.get("camera_contrast"))
+        printer_enabled = bool(data.get("printer_enabled"))
+        printer_threshold = int(data.get("printer_threshold"))
+        printer_feed_lines = int(data.get("printer_feed_lines"))
+        printer_heat_dots = int(data.get("printer_heat_dots"))
+        printer_heat_time = int(data.get("printer_heat_time"))
+        printer_heat_interval = int(data.get("printer_heat_interval"))
+        printer_density = int(data.get("printer_density"))
+        printer_break_time = int(data.get("printer_break_time"))
         if not prompt or len(prompt) > 500:
             raise ValueError("Prompt must contain 1 to 500 characters")
+        if not cloud_prompt or len(cloud_prompt) > 800:
+            raise ValueError("Cloud prompt must contain 1 to 800 characters")
+        if not openrouter_model.startswith("google/") or len(openrouter_model) > 100:
+            raise ValueError("OpenRouter model must be a Google model ID")
         if resolution not in (256, 384, 512):
             raise ValueError("Input resolution must be 256, 384, or 512")
         if not 4 <= steps <= 30:
@@ -416,16 +555,46 @@ def on_set_settings(client, data):
             raise ValueError("Image guidance must be between 1 and 3")
         if seed is not None and not 0 <= seed <= 0x7FFFFFFF:
             raise ValueError("Seed must be between 0 and 2147483647")
+        if not -1.0 <= camera_brightness <= 1.0:
+            raise ValueError("Camera brightness must be between -1 and 1")
+        if not 0.5 <= camera_contrast <= 2.0:
+            raise ValueError("Camera contrast must be between 0.5 and 2")
+        if not 1 <= printer_threshold <= 254:
+            raise ValueError("Printer threshold must be between 1 and 254")
+        if not 0 <= printer_feed_lines <= 8:
+            raise ValueError("Printer feed must be between 0 and 8 lines")
+        if not 1 <= printer_heat_dots <= 30:
+            raise ValueError("Heat dots must be between 1 and 30")
+        if not 3 <= printer_heat_time <= 255:
+            raise ValueError("Heat time must be between 3 and 255")
+        if not 0 <= printer_heat_interval <= 255:
+            raise ValueError("Heat interval must be between 0 and 255")
+        if not 0 <= printer_density <= 20:
+            raise ValueError("Print density must be between 0 and 20")
+        if not 0 <= printer_break_time <= 7:
+            raise ValueError("Break time must be between 0 and 7")
         with state_lock:
             if state["busy"]:
                 raise ValueError("Settings cannot change while a photo is processing")
             config.update({
                 "npu_prompt": prompt,
+                "cloud_prompt": cloud_prompt,
+                "openrouter_model": openrouter_model,
                 "generation_width": resolution,
                 "npu_steps": steps,
                 "npu_guidance_scale": guidance_scale,
                 "npu_image_guidance_scale": image_guidance_scale,
                 "npu_seed": seed,
+                "camera_brightness": camera_brightness,
+                "camera_contrast": camera_contrast,
+                "printer_enabled": printer_enabled,
+                "printer_threshold": printer_threshold,
+                "printer_feed_lines": printer_feed_lines,
+                "printer_heat_dots": printer_heat_dots,
+                "printer_heat_time": printer_heat_time,
+                "printer_heat_interval": printer_heat_interval,
+                "printer_density": printer_density,
+                "printer_break_time": printer_break_time,
             })
         ui.send_message("camera_state", snapshot_state())
     except (TypeError, ValueError) as exc:
@@ -457,13 +626,56 @@ def on_set_reference(client, data):
         ui.send_message("settings_error", {"message": str(exc)}, client)
 
 
+def endpoint_reachable(url, timeout=1.0):
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.hostname:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def refresh_availability():
+    camera_ready = Path(config["camera"]).exists()
+    availability = {
+        "normal": camera_ready,
+        "cloud": (
+            camera_ready
+            and REFERENCE_PATH.is_file()
+            and bool(os.getenv("OPENROUTER_API_KEY"))
+            and endpoint_reachable("https://openrouter.ai", 1.5)
+        ),
+        "local": camera_ready and endpoint_reachable(config["npu_url"]),
+    }
+    with state_lock:
+        changed = availability != state["availability"]
+        state["availability"] = availability
+    try:
+        Bridge.notify("set_options", availability["normal"], availability["cloud"], availability["local"])
+    except Exception as exc:
+        logger.info(f"Button availability update skipped: {exc}")
+    if changed:
+        ui.send_message("camera_state", snapshot_state())
+
+
+def availability_worker():
+    while True:
+        refresh_availability()
+        time.sleep(10)
+
+
 CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
-if config["backend"] == "identity" and not REFERENCE_PATH.exists():
-    raise RuntimeError(f"Reference portrait missing: {REFERENCE_PATH}")
 Bridge.provide("take_photo", on_hardware_shutter)
 ui.on_message("take_photo", on_ui_capture)
+ui.on_message("test_print", on_test_print)
+ui.on_message("reprint", on_reprint)
 ui.on_message("get_state", on_get_state)
 ui.on_message("set_settings", on_set_settings)
 ui.on_message("set_reference", on_set_reference)
 threading.Thread(target=worker, daemon=True).start()
+refresh_availability()
+threading.Thread(target=availability_worker, daemon=True).start()
 App.run()

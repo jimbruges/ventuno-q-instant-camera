@@ -8,6 +8,7 @@
   "npu_guidance_scale": 7.5,
   "npu_image_guidance_scale": 1.5,
   "npu_seed": null,
+  "cloud_prompt": "Place the person from the second reference image naturally into the scene in the first image. Keep their face, body, clothes, and identity recognizable. If people are present, pose them together; otherwise place the person naturally in the background. Preserve the scene, lighting, camera angle, and realistic photographic style.",
   "identity_prompt": "candid instant camera photograph, a man img naturally joining the people in the scene",
   "sd_cli": "/home/arduino/instant-camera-ai/bin/sd-cli",
   "sd_model": "/home/arduino/instant-camera-ai/models/realistic-vision-v5.1.safetensors",
@@ -18,5 +19,15 @@
   "generation_steps": 4,
   "generation_strength": 0.78,
   "camera_rotation": 0,
-  "openrouter_model": "google/gemini-2.5-flash-image-preview"
+  "camera_brightness": 0,
+  "camera_contrast": 1,
+  "openrouter_model": "google/gemini-2.5-flash-image",
+  "printer_enabled": true,
+  "printer_threshold": 125,
+  "printer_feed_lines": 3,
+  "printer_heat_dots": 11,
+  "printer_heat_time": 120,
+  "printer_heat_interval": 40,
+  "printer_density": 10,
+  "printer_break_time": 2
 }

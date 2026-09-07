@@ -13,6 +13,33 @@ def receipt_raster(image, width=384, threshold=95):
     )
 
 
+def packed_printer_bytes(raster):
+    inverted = Image.eval(raster.convert("L"), lambda value: 255 - value)
+    return inverted.convert("1").tobytes()
+
+
+def send_to_printer(raster, bridge, feed_lines=3, rows_per_chunk=8):
+    if raster.width != 384:
+        raise ValueError("Printer raster must be 384 pixels wide")
+    packed = packed_printer_bytes(raster)
+    rows = raster.height
+    if len(packed) != rows * 48:
+        raise ValueError("Printer raster must contain exactly 48 bytes per row")
+    if bridge.call("print_begin", rows) is not True:
+        raise RuntimeError("Printer rejected the new job")
+    try:
+        for offset in range(0, rows, rows_per_chunk):
+            chunk = packed[offset * 48:min(offset + rows_per_chunk, rows) * 48]
+            if bridge.call("print_rows", list(chunk)) is not True:
+                end = offset + len(chunk) // 48
+                raise RuntimeError(f"Printer rejected rows {offset + 1}-{end}")
+        if bridge.call("print_end", feed_lines) is not True:
+            raise RuntimeError("Printer did not finish the job")
+    except Exception:
+        bridge.call("print_cancel")
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Rasterize a generated image for a monochrome receipt printer"

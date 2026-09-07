@@ -14,6 +14,8 @@ const elapsed = document.querySelector('#elapsed');
 const settingsForm = document.querySelector('#settings-form');
 const settingsStatus = document.querySelector('#settings-status');
 const promptInput = document.querySelector('#prompt');
+const cloudPromptInput = document.querySelector('#cloud-prompt');
+const openrouterModelInput = document.querySelector('#openrouter-model');
 const resolutionInput = document.querySelector('#resolution');
 const stepsInput = document.querySelector('#steps');
 const guidanceInput = document.querySelector('#guidance');
@@ -26,6 +28,18 @@ const randomSeedInput = document.querySelector('#random-seed');
 const seedInput = document.querySelector('#seed');
 const seedField = document.querySelector('#seed-field');
 const applySettings = document.querySelector('#apply-settings');
+const brightnessInput = document.querySelector('#camera-brightness');
+const contrastInput = document.querySelector('#camera-contrast');
+const printerEnabledInput = document.querySelector('#printer-enabled');
+const printerThresholdInput = document.querySelector('#printer-threshold');
+const printerFeedInput = document.querySelector('#printer-feed');
+const printerHeatDotsInput = document.querySelector('#printer-heat-dots');
+const printerHeatTimeInput = document.querySelector('#printer-heat-time');
+const printerHeatIntervalInput = document.querySelector('#printer-heat-interval');
+const printerDensityInput = document.querySelector('#printer-density');
+const printerBreakTimeInput = document.querySelector('#printer-break-time');
+const testPrint = document.querySelector('#test-print');
+const modeButtons = [...document.querySelectorAll('.mode-button')];
 let startedAt = 0;
 let timer = 0;
 let settingsDirty = false;
@@ -33,7 +47,7 @@ let pendingSettings = null;
 let captureAfterSettingsSave = false;
 
 ui.on_connect(() => { connection.textContent = 'BOARD ONLINE'; connection.classList.add('online'); ui.send_message('get_state'); });
-ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; });
+ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; modeButtons.forEach(button => { button.disabled = true; }); });
 ui.on_message('camera_state', render);
 ui.on_message('settings_error', ({ message: error }) => {
   pendingSettings = null;
@@ -48,9 +62,11 @@ shutter.addEventListener('click', () => {
   } else if (pendingSettings) {
     captureAfterSettingsSave = true;
   } else {
-    ui.send_message('take_photo');
+    ui.send_message('take_photo', { mode: 'normal' });
   }
 });
+modeButtons.forEach(button => button.addEventListener('click', () => ui.send_message('take_photo', { mode: button.dataset.mode })));
+testPrint.addEventListener('click', () => ui.send_message('test_print'));
 settingsForm.addEventListener('input', () => { settingsDirty = true; settingsStatus.textContent = 'UNSAVED'; settingsStatus.className = ''; updateSettingOutputs(); });
 settingsForm.addEventListener('submit', event => {
   event.preventDefault();
@@ -58,11 +74,23 @@ settingsForm.addEventListener('submit', event => {
   settingsStatus.textContent = 'SAVING';
   pendingSettings = {
     prompt: promptInput.value,
+    cloud_prompt: cloudPromptInput.value,
+    openrouter_model: openrouterModelInput.value,
     resolution: Number(resolutionInput.value),
     steps: Number(stepsInput.value),
     guidance_scale: Number(guidanceInput.value),
     image_guidance_scale: Number(imageGuidanceInput.value),
     seed: randomSeedInput.checked ? null : Number(seedInput.value),
+    camera_brightness: Number(brightnessInput.value),
+    camera_contrast: Number(contrastInput.value),
+    printer_enabled: printerEnabledInput.checked,
+    printer_threshold: Number(printerThresholdInput.value),
+    printer_feed_lines: Number(printerFeedInput.value),
+    printer_heat_dots: Number(printerHeatDotsInput.value),
+    printer_heat_time: Number(printerHeatTimeInput.value),
+    printer_heat_interval: Number(printerHeatIntervalInput.value),
+    printer_density: Number(printerDensityInput.value),
+    printer_break_time: Number(printerBreakTimeInput.value),
   };
   ui.send_message('set_settings', pendingSettings);
 });
@@ -106,8 +134,15 @@ removeReference.addEventListener('click', () => {
 function render(state) {
   statusText.textContent = state.status.toUpperCase();
   message.textContent = state.message;
-  backend.textContent = state.backend === 'local' ? 'LOCAL AI' : state.backend.toUpperCase();
+  backend.textContent = state.active_mode ? state.active_mode.toUpperCase() : 'THREE MODE';
   shutter.disabled = state.busy;
+  const availability = state.availability || {};
+  modeButtons.forEach(button => {
+    const available = Boolean(availability[button.dataset.mode]);
+    button.disabled = state.busy || !available;
+    button.classList.toggle('available', available);
+    button.classList.toggle('active', state.active_mode === button.dataset.mode);
+  });
   settingsForm.querySelector('fieldset')?.toggleAttribute('disabled', state.busy);
   applySettings.disabled = state.busy;
   progress.classList.toggle('active', state.busy);
@@ -130,17 +165,34 @@ function render(state) {
   gallery.replaceChildren(...photos.map((photo, index) => {
     const figure = document.createElement('figure'); figure.className = 'photo'; figure.style.setProperty('--tilt', `${[-1.2,.7,-.5][index % 3]}deg`);
     const image = document.createElement('img'); image.src = photo.image; image.alt = 'Generated instant photograph'; image.loading = 'lazy';
-    const caption = document.createElement('figcaption'); caption.textContent = new Date(photo.created).toLocaleString();
-    figure.append(image, caption); return figure;
+    const caption = document.createElement('figcaption'); caption.textContent = `${photo.mode.toUpperCase()} · ${new Date(photo.created).toLocaleString()}`;
+    figure.append(image, caption);
+    if (photo.print) {
+      const reprint = document.createElement('button'); reprint.type = 'button'; reprint.className = 'reprint'; reprint.textContent = 'REPRINT';
+      reprint.disabled = state.busy; reprint.addEventListener('click', () => ui.send_message('reprint', { id: photo.id })); figure.append(reprint);
+    }
+    return figure;
   }));
   if (state.settings && !settingsDirty) {
     promptInput.value = state.settings.prompt;
+    cloudPromptInput.value = state.settings.cloud_prompt;
+    openrouterModelInput.value = state.settings.openrouter_model;
     resolutionInput.value = state.settings.resolution;
     stepsInput.value = state.settings.steps;
     guidanceInput.value = state.settings.guidance_scale;
     imageGuidanceInput.value = state.settings.image_guidance_scale;
     randomSeedInput.checked = state.settings.seed === null;
     if (state.settings.seed !== null) seedInput.value = state.settings.seed;
+    brightnessInput.value = state.settings.camera_brightness;
+    contrastInput.value = state.settings.camera_contrast;
+    printerEnabledInput.checked = state.settings.printer_enabled;
+    printerThresholdInput.value = state.settings.printer_threshold;
+    printerFeedInput.value = state.settings.printer_feed_lines;
+    printerHeatDotsInput.value = state.settings.printer_heat_dots;
+    printerHeatTimeInput.value = state.settings.printer_heat_time;
+    printerHeatIntervalInput.value = state.settings.printer_heat_interval;
+    printerDensityInput.value = state.settings.printer_density;
+    printerBreakTimeInput.value = state.settings.printer_break_time;
     settingsStatus.textContent = 'APPLIED';
     settingsStatus.className = 'saved';
     updateSeedControl();
@@ -168,6 +220,9 @@ function updateSettingOutputs() {
   document.querySelector('#steps-value').textContent = stepsInput.value;
   document.querySelector('#guidance-value').textContent = guidanceInput.value;
   document.querySelector('#image-guidance-value').textContent = imageGuidanceInput.value;
+  document.querySelector('#brightness-value').textContent = brightnessInput.value;
+  document.querySelector('#contrast-value').textContent = contrastInput.value;
+  document.querySelector('#threshold-value').textContent = printerThresholdInput.value;
 }
 
 function updateSeedControl() {
@@ -178,9 +233,21 @@ function updateSeedControl() {
 function settingsMatch(actual, expected) {
   return actual
     && actual.prompt === expected.prompt
+    && actual.cloud_prompt === expected.cloud_prompt
+    && actual.openrouter_model === expected.openrouter_model
     && actual.resolution === expected.resolution
     && actual.steps === expected.steps
     && actual.guidance_scale === expected.guidance_scale
     && actual.image_guidance_scale === expected.image_guidance_scale
-    && actual.seed === expected.seed;
+    && actual.seed === expected.seed
+    && actual.camera_brightness === expected.camera_brightness
+    && actual.camera_contrast === expected.camera_contrast
+    && actual.printer_enabled === expected.printer_enabled
+    && actual.printer_threshold === expected.printer_threshold
+    && actual.printer_feed_lines === expected.printer_feed_lines
+    && actual.printer_heat_dots === expected.printer_heat_dots
+    && actual.printer_heat_time === expected.printer_heat_time
+    && actual.printer_heat_interval === expected.printer_heat_interval
+    && actual.printer_density === expected.printer_density
+    && actual.printer_break_time === expected.printer_break_time;
 }

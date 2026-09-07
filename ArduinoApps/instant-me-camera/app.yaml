@@ -1,5 +1,5 @@
-name: Instant Me Camera
+name: Instant Me Photobooth
 icon: 📷
-description: Capture a scene and edit it from a prompt and optional reference image.
+description: Capture, transform, archive, and thermally print photos in three headless modes.
 bricks:
   - arduino:web_ui
