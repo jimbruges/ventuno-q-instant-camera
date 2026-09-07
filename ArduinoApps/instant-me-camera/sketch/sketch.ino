@@ -58,14 +58,15 @@ void setup() {
 }
 
 void loop() {
-  buttons.update();
-  const char *modes[3] = {"normal", "cloud", "local"};
-  for (int index = 0; index < 3; index++) {
-    bool pressed = buttons.isPressed(index) == HIGH;
-    if (pressed && !previousPressed[index] && optionsAvailable[index] && cameraState == READY) {
-      Bridge.notify("take_photo", modes[index]);
+  if (buttons.update()) {
+    const char *modes[3] = {"normal", "cloud", "local"};
+    for (int index = 0; index < 3; index++) {
+      bool pressed = buttons.isPressed(index) == HIGH;
+      if (pressed && !previousPressed[index] && optionsAvailable[index] && cameraState == READY) {
+        Bridge.notify("take_photo", modes[index]);
+      }
+      previousPressed[index] = pressed;
     }
-    previousPressed[index] = pressed;
   }
 
   if ((cameraState == COUNTDOWN || cameraState == GENERATING || cameraState == PRINTING) && millis() - lastFrameAt > 160) {

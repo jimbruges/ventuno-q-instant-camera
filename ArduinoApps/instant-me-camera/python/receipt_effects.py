@@ -4,9 +4,13 @@ from pathlib import Path
 from PIL import Image
 
 
-def receipt_raster(image, width=384, threshold=95):
+def receipt_raster(image, width=384, threshold=96, dither=True):
     height = max(1, round(width * image.height / image.width))
     gray = image.convert("L").resize((width, height), Image.Resampling.LANCZOS)
+    if dither:
+        offset = 128 - threshold
+        adjusted = gray.point(lambda value: max(0, min(255, value + offset)))
+        return adjusted.convert("1", dither=Image.Dither.FLOYDSTEINBERG)
     return gray.point(
         lambda value: 255 if value >= threshold else 0,
         mode="1",
@@ -47,11 +51,12 @@ def main():
     parser.add_argument("image", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--width", type=int, default=384)
-    parser.add_argument("--threshold", type=int, default=95)
+    parser.add_argument("--threshold", type=int, default=96)
+    parser.add_argument("--no-dither", action="store_true")
     args = parser.parse_args()
 
     with Image.open(args.image) as image:
-        receipt = receipt_raster(image, args.width, args.threshold)
+        receipt = receipt_raster(image, args.width, args.threshold, not args.no_dither)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     receipt.save(args.output, optimize=True)
 

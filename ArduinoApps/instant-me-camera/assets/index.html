@@ -36,74 +36,92 @@
     </section>
     <section class="settings" aria-labelledby="settings-title">
       <div class="settings-heading">
-        <div><small>EDITOR CONTROL</small><h2 id="settings-title">SHOT SETTINGS</h2></div>
+        <div><small>EDITOR CONTROL</small><h2 id="settings-title">NORMAL SETTINGS</h2></div>
         <span id="settings-status" aria-live="polite"></span>
       </div>
       <form id="settings-form">
-        <label class="prompt-field">INSTRUCTION
-          <textarea id="prompt" name="prompt" maxlength="500" rows="3" required></textarea>
-        </label>
-        <label class="prompt-field">CLOUD COMPOSITION INSTRUCTION
-          <textarea id="cloud-prompt" name="cloud_prompt" maxlength="800" rows="4" required></textarea>
-        </label>
-        <div class="reference-control">
-          <div class="reference-copy"><small>REFERENCE IMAGE</small><strong id="reference-name">NONE SELECTED</strong></div>
-          <img id="reference-preview" alt="Object reference preview">
-          <label class="reference-upload">CHOOSE IMAGE<input id="reference-input" type="file" accept="image/jpeg,image/png,image/webp"></label>
-          <button id="remove-reference" class="remove-reference" type="button" aria-label="Remove reference image" title="Remove reference image">×</button>
-        </div>
-        <div class="settings-grid">
-          <label>OPENROUTER MODEL
+        <fieldset class="mode-panel" data-settings-mode="cloud" hidden>
+          <legend>CLOUD COMPOSITION</legend>
+          <label class="prompt-field">INSTRUCTION
+            <textarea id="cloud-prompt" name="cloud_prompt" maxlength="800" rows="4" required></textarea>
+          </label>
+          <label class="model-field">OPENROUTER MODEL
             <input id="openrouter-model" name="openrouter_model" type="text" maxlength="100" required>
           </label>
-          <label>INPUT RESOLUTION
-            <select id="resolution" name="resolution">
-              <option value="256">256 px</option>
-              <option value="384">384 px</option>
-              <option value="512">512 px</option>
-            </select>
+        </fieldset>
+        <fieldset class="mode-panel" data-settings-mode="local" hidden>
+          <legend>LOCAL AI EFFECT</legend>
+          <div class="model-selector">
+            <label>MODEL TYPE
+              <select id="npu-model" name="npu_model">
+                <option value="standard">STANDARD 512 · QUALITY</option>
+                <option value="hyper">HYPER-SD 384 · FAST</option>
+              </select>
+            </label>
+            <small id="model-description">FULL 20-STEP EDITOR · BEST COMPOSITION</small>
+          </div>
+          <label class="prompt-field">INSTRUCTION
+            <textarea id="prompt" name="prompt" maxlength="500" rows="3" required></textarea>
           </label>
-          <label>STEPS <output id="steps-value">20</output>
-            <input id="steps" name="steps" type="range" min="4" max="30" step="1" value="20">
-          </label>
-          <label>TEXT GUIDANCE <output id="guidance-value">7.5</output>
-            <input id="guidance" name="guidance_scale" type="range" min="1" max="15" step="0.5" value="7.5">
-          </label>
-          <label>IMAGE GUIDANCE <output id="image-guidance-value">1.5</output>
-            <input id="image-guidance" name="image_guidance_scale" type="range" min="1" max="3" step="0.1" value="1.5">
-          </label>
-          <label>CAMERA BRIGHTNESS <output id="brightness-value">0</output>
-            <input id="camera-brightness" name="camera_brightness" type="range" min="-1" max="1" step="0.05" value="0">
-          </label>
-          <label>CAMERA CONTRAST <output id="contrast-value">1</output>
-            <input id="camera-contrast" name="camera_contrast" type="range" min="0.5" max="2" step="0.05" value="1">
-          </label>
-          <label>PRINT THRESHOLD <output id="threshold-value">125</output>
-            <input id="printer-threshold" name="printer_threshold" type="range" min="1" max="254" step="1" value="125">
-          </label>
-          <label>PAPER FEED
-            <input id="printer-feed" name="printer_feed_lines" type="number" min="0" max="8" value="3">
-          </label>
-          <label>HEAT DOTS
-            <input id="printer-heat-dots" name="printer_heat_dots" type="number" min="1" max="30" value="5">
-          </label>
-          <label>HEAT TIME
-            <input id="printer-heat-time" name="printer_heat_time" type="number" min="3" max="255" value="162">
-          </label>
-          <label>HEAT INTERVAL
-            <input id="printer-heat-interval" name="printer_heat_interval" type="number" min="0" max="255" value="40">
-          </label>
-          <label>PRINT DENSITY
-            <input id="printer-density" name="printer_density" type="number" min="0" max="20" value="4">
-          </label>
-          <label>BREAK TIME
-            <input id="printer-break-time" name="printer_break_time" type="number" min="0" max="7" value="2">
-          </label>
-        </div>
+          <div class="reference-control">
+            <div class="reference-copy"><small>REFERENCE IMAGE</small><strong id="reference-name">NONE SELECTED</strong></div>
+            <img id="reference-preview" alt="Object reference preview">
+            <label class="reference-upload">CHOOSE IMAGE<input id="reference-input" type="file" accept="image/jpeg,image/png,image/webp"></label>
+            <button id="remove-reference" class="remove-reference" type="button" aria-label="Remove reference image" title="Remove reference image">×</button>
+          </div>
+          <div class="settings-grid">
+            <label>INPUT RESOLUTION
+              <select id="resolution" name="resolution" disabled>
+                <option value="384">384 px</option>
+                <option value="512">512 px</option>
+              </select>
+            </label>
+            <label>STEPS <output id="steps-value">20</output>
+              <input id="steps" name="steps" type="range" min="4" max="30" step="1" value="20">
+            </label>
+            <label>TEXT GUIDANCE <output id="guidance-value">7.5</output>
+              <input id="guidance" name="guidance_scale" type="range" min="1" max="15" step="0.5" value="7.5">
+            </label>
+            <label>IMAGE GUIDANCE <output id="image-guidance-value">1.5</output>
+              <input id="image-guidance" name="image_guidance_scale" type="range" min="1" max="3" step="0.1" value="1.5">
+            </label>
+          </div>
+          <div class="mode-toggles">
+            <label class="seed-toggle"><input id="random-seed" type="checkbox" checked><span>RANDOM SEED</span></label>
+            <label id="seed-field" class="seed-field">FIXED SEED<input id="seed" name="seed" type="number" min="0" max="2147483647" value="47" disabled></label>
+          </div>
+        </fieldset>
+        <fieldset class="common-panel">
+          <legend>CAMERA</legend>
+          <div class="settings-grid camera-settings">
+            <label>CAMERA BRIGHTNESS <output id="brightness-value">0</output>
+              <input id="camera-brightness" name="camera_brightness" type="range" min="-1" max="1" step="0.05" value="0">
+            </label>
+            <label>CAMERA CONTRAST <output id="contrast-value">1</output>
+              <input id="camera-contrast" name="camera_contrast" type="range" min="0.5" max="2" step="0.05" value="1">
+            </label>
+          </div>
+        </fieldset>
+        <fieldset class="common-panel print-panel">
+          <legend>PRINT</legend>
+          <div class="print-toggles">
+            <label class="seed-toggle"><input id="printer-enabled" type="checkbox" checked><span>PRINT AFTER CAPTURE</span></label>
+            <label class="seed-toggle"><input id="printer-dither" type="checkbox" checked><span>DITHER TONES</span></label>
+          </div>
+          <div class="settings-grid">
+            <label>PRINT THRESHOLD <output id="threshold-value">96</output>
+              <input id="printer-threshold" name="printer_threshold" type="range" min="1" max="254" step="1" value="96">
+            </label>
+            <label>PAPER FEED<input id="printer-feed" name="printer_feed_lines" type="number" min="0" max="8" value="3"></label>
+            <label>HEAT DOTS<input id="printer-heat-dots" name="printer_heat_dots" type="number" min="1" max="30" value="5"></label>
+            <label>HEAT TIME<input id="printer-heat-time" name="printer_heat_time" type="number" min="3" max="255" value="162"></label>
+            <label>HEAT INTERVAL<input id="printer-heat-interval" name="printer_heat_interval" type="number" min="0" max="255" value="40"></label>
+            <label>PRINT DENSITY<input id="printer-density" name="printer_density" type="number" min="0" max="20" value="4"></label>
+            <label>BREAK TIME<input id="printer-break-time" name="printer_break_time" type="number" min="0" max="7" value="2"></label>
+          </div>
+        </fieldset>
         <div class="settings-actions">
-          <label class="seed-toggle"><input id="printer-enabled" type="checkbox" checked><span>PRINT AFTER CAPTURE</span></label>
-          <label class="seed-toggle"><input id="random-seed" type="checkbox" checked><span>RANDOM SEED</span></label>
-          <label id="seed-field" class="seed-field">FIXED SEED<input id="seed" name="seed" type="number" min="0" max="2147483647" value="47" disabled></label>
+          <button id="capture" type="button">CAPTURE</button>
           <button id="apply-settings" type="submit">APPLY SETTINGS</button>
           <button id="test-print" class="secondary-action" type="button">TEST PRINT</button>
         </div>

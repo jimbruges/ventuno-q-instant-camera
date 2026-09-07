@@ -8,6 +8,25 @@
   "npu_guidance_scale": 7.5,
   "npu_image_guidance_scale": 1.5,
   "npu_seed": null,
+  "npu_model": "standard",
+  "npu_profiles": {
+    "standard": {
+      "prompt": "Please replace just the head of any human in this image with a large rubber duck. Preserve every person, their clothes, the room, lighting, and camera angle.",
+      "resolution": 512,
+      "steps": 20,
+      "guidance_scale": 7.5,
+      "image_guidance_scale": 1.5,
+      "seed": null
+    },
+    "hyper": {
+      "prompt": "a photorealistic person holding the reference object naturally",
+      "resolution": 384,
+      "steps": 4,
+      "guidance_scale": 1.0,
+      "image_guidance_scale": 1.0,
+      "seed": null
+    }
+  },
   "cloud_prompt": "Place the person from the second reference image naturally into the scene in the first image. Keep their face, body, clothes, and identity recognizable. If people are present, pose them together; otherwise place the person naturally in the background. Preserve the scene, lighting, camera angle, and realistic photographic style.",
   "identity_prompt": "candid instant camera photograph, a man img naturally joining the people in the scene",
   "sd_cli": "/home/arduino/instant-camera-ai/bin/sd-cli",
@@ -23,7 +42,8 @@
   "camera_contrast": 1,
   "openrouter_model": "google/gemini-2.5-flash-image",
   "printer_enabled": true,
-  "printer_threshold": 125,
+  "printer_threshold": 96,
+  "printer_dither": true,
   "printer_feed_lines": 3,
   "printer_heat_dots": 5,
   "printer_heat_time": 162,

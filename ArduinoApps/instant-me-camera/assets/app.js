@@ -13,9 +13,12 @@ const progress = document.querySelector('#progress');
 const elapsed = document.querySelector('#elapsed');
 const settingsForm = document.querySelector('#settings-form');
 const settingsStatus = document.querySelector('#settings-status');
+const settingsTitle = document.querySelector('#settings-title');
 const promptInput = document.querySelector('#prompt');
 const cloudPromptInput = document.querySelector('#cloud-prompt');
 const openrouterModelInput = document.querySelector('#openrouter-model');
+const npuModelInput = document.querySelector('#npu-model');
+const modelDescription = document.querySelector('#model-description');
 const resolutionInput = document.querySelector('#resolution');
 const stepsInput = document.querySelector('#steps');
 const guidanceInput = document.querySelector('#guidance');
@@ -31,6 +34,7 @@ const applySettings = document.querySelector('#apply-settings');
 const brightnessInput = document.querySelector('#camera-brightness');
 const contrastInput = document.querySelector('#camera-contrast');
 const printerEnabledInput = document.querySelector('#printer-enabled');
+const printerDitherInput = document.querySelector('#printer-dither');
 const printerThresholdInput = document.querySelector('#printer-threshold');
 const printerFeedInput = document.querySelector('#printer-feed');
 const printerHeatDotsInput = document.querySelector('#printer-heat-dots');
@@ -39,15 +43,21 @@ const printerHeatIntervalInput = document.querySelector('#printer-heat-interval'
 const printerDensityInput = document.querySelector('#printer-density');
 const printerBreakTimeInput = document.querySelector('#printer-break-time');
 const testPrint = document.querySelector('#test-print');
+const capture = document.querySelector('#capture');
 const modeButtons = [...document.querySelectorAll('.mode-button')];
+const modePanels = [...document.querySelectorAll('.mode-panel')];
 let startedAt = 0;
 let timer = 0;
 let settingsDirty = false;
 let pendingSettings = null;
 let captureAfterSettingsSave = false;
+let selectedMode = 'normal';
+let currentAvailability = {};
+let modelProfiles = {};
+let selectedNpuModel = 'standard';
 
 ui.on_connect(() => { connection.textContent = 'BOARD ONLINE'; connection.classList.add('online'); ui.send_message('get_state'); });
-ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; modeButtons.forEach(button => { button.disabled = true; }); });
+ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; capture.disabled = true; modeButtons.forEach(button => { button.disabled = true; }); });
 ui.on_message('camera_state', render);
 ui.on_message('settings_error', ({ message: error }) => {
   pendingSettings = null;
@@ -55,24 +65,28 @@ ui.on_message('settings_error', ({ message: error }) => {
   settingsStatus.textContent = error;
   settingsStatus.className = 'error';
 });
-shutter.addEventListener('click', () => {
+function requestSelectedCapture() {
   if (settingsDirty) {
     captureAfterSettingsSave = true;
     settingsForm.requestSubmit();
   } else if (pendingSettings) {
     captureAfterSettingsSave = true;
   } else {
-    ui.send_message('take_photo', { mode: 'normal' });
+    ui.send_message('take_photo', { mode: selectedMode });
   }
-});
-modeButtons.forEach(button => button.addEventListener('click', () => ui.send_message('take_photo', { mode: button.dataset.mode })));
+}
+shutter.addEventListener('click', requestSelectedCapture);
+capture.addEventListener('click', requestSelectedCapture);
+modeButtons.forEach(button => button.addEventListener('click', () => selectMode(button.dataset.mode)));
 testPrint.addEventListener('click', () => ui.send_message('test_print'));
 settingsForm.addEventListener('input', () => { settingsDirty = true; settingsStatus.textContent = 'UNSAVED'; settingsStatus.className = ''; updateSettingOutputs(); });
 settingsForm.addEventListener('submit', event => {
   event.preventDefault();
   settingsDirty = false;
   settingsStatus.textContent = 'SAVING';
+  modelProfiles[selectedNpuModel] = readLocalProfile();
   pendingSettings = {
+    npu_model: selectedNpuModel,
     prompt: promptInput.value,
     cloud_prompt: cloudPromptInput.value,
     openrouter_model: openrouterModelInput.value,
@@ -85,6 +99,7 @@ settingsForm.addEventListener('submit', event => {
     camera_contrast: Number(contrastInput.value),
     printer_enabled: printerEnabledInput.checked,
     printer_threshold: Number(printerThresholdInput.value),
+    printer_dither: printerDitherInput.checked,
     printer_feed_lines: Number(printerFeedInput.value),
     printer_heat_dots: Number(printerHeatDotsInput.value),
     printer_heat_time: Number(printerHeatTimeInput.value),
@@ -93,6 +108,14 @@ settingsForm.addEventListener('submit', event => {
     printer_break_time: Number(printerBreakTimeInput.value),
   };
   ui.send_message('set_settings', pendingSettings);
+});
+npuModelInput.addEventListener('change', () => {
+  modelProfiles[selectedNpuModel] = readLocalProfile();
+  selectedNpuModel = npuModelInput.value;
+  loadLocalProfile(modelProfiles[selectedNpuModel]);
+  settingsDirty = true;
+  settingsStatus.textContent = 'UNSAVED';
+  settingsStatus.className = '';
 });
 randomSeedInput.addEventListener('change', updateSeedControl);
 referenceInput.addEventListener('change', () => {
@@ -137,14 +160,18 @@ function render(state) {
   backend.textContent = state.active_mode ? state.active_mode.toUpperCase() : 'THREE MODE';
   shutter.disabled = state.busy;
   const availability = state.availability || {};
+  currentAvailability = availability;
   modeButtons.forEach(button => {
     const available = Boolean(availability[button.dataset.mode]);
-    button.disabled = state.busy || !available;
+    button.disabled = state.busy;
     button.classList.toggle('available', available);
+    button.classList.toggle('selected', selectedMode === button.dataset.mode);
     button.classList.toggle('active', state.active_mode === button.dataset.mode);
   });
-  settingsForm.querySelector('fieldset')?.toggleAttribute('disabled', state.busy);
+  modePanels.forEach(panel => { panel.disabled = state.busy || panel.hidden; });
+  [...settingsForm.querySelectorAll('.common-panel')].forEach(panel => { panel.disabled = state.busy; });
   applySettings.disabled = state.busy;
+  capture.disabled = state.busy || !availability[selectedMode];
   progress.classList.toggle('active', state.busy);
   if (state.busy && !startedAt) {
     startedAt = Date.now();
@@ -174,19 +201,17 @@ function render(state) {
     return figure;
   }));
   if (state.settings && !settingsDirty) {
-    promptInput.value = state.settings.prompt;
+    modelProfiles = structuredClone(state.settings.npu_profiles || {});
+    selectedNpuModel = state.settings.npu_model || 'standard';
+    npuModelInput.value = selectedNpuModel;
+    loadLocalProfile(modelProfiles[selectedNpuModel] || state.settings);
     cloudPromptInput.value = state.settings.cloud_prompt;
     openrouterModelInput.value = state.settings.openrouter_model;
-    resolutionInput.value = state.settings.resolution;
-    stepsInput.value = state.settings.steps;
-    guidanceInput.value = state.settings.guidance_scale;
-    imageGuidanceInput.value = state.settings.image_guidance_scale;
-    randomSeedInput.checked = state.settings.seed === null;
-    if (state.settings.seed !== null) seedInput.value = state.settings.seed;
     brightnessInput.value = state.settings.camera_brightness;
     contrastInput.value = state.settings.camera_contrast;
     printerEnabledInput.checked = state.settings.printer_enabled;
     printerThresholdInput.value = state.settings.printer_threshold;
+    printerDitherInput.checked = state.settings.printer_dither !== false;
     printerFeedInput.value = state.settings.printer_feed_lines;
     printerHeatDotsInput.value = state.settings.printer_heat_dots;
     printerHeatTimeInput.value = state.settings.printer_heat_time;
@@ -202,7 +227,7 @@ function render(state) {
     pendingSettings = null;
     if (captureAfterSettingsSave) {
       captureAfterSettingsSave = false;
-      ui.send_message('take_photo');
+      ui.send_message('take_photo', { mode: selectedMode });
     }
   }
   const hasReference = Boolean(state.npu_reference);
@@ -210,6 +235,18 @@ function render(state) {
   removeReference.style.display = hasReference ? 'block' : 'none';
   referenceName.textContent = hasReference ? 'REFERENCE READY' : 'NONE SELECTED';
   if (hasReference) referencePreview.src = state.npu_reference;
+}
+
+function selectMode(mode, scroll = true) {
+  selectedMode = mode;
+  settingsTitle.textContent = `${mode.toUpperCase()} SETTINGS`;
+  modePanels.forEach(panel => {
+    panel.hidden = panel.dataset.settingsMode !== mode;
+    panel.disabled = panel.hidden;
+  });
+  modeButtons.forEach(button => button.classList.toggle('selected', button.dataset.mode === mode));
+  capture.disabled = !currentAvailability[mode];
+  if (scroll) document.querySelector('.settings').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function updateElapsed() {
@@ -230,8 +267,36 @@ function updateSeedControl() {
   seedField.classList.toggle('inactive', randomSeedInput.checked);
 }
 
+function readLocalProfile() {
+  return {
+    prompt: promptInput.value,
+    resolution: Number(resolutionInput.value),
+    steps: Number(stepsInput.value),
+    guidance_scale: Number(guidanceInput.value),
+    image_guidance_scale: Number(imageGuidanceInput.value),
+    seed: randomSeedInput.checked ? null : Number(seedInput.value),
+  };
+}
+
+function loadLocalProfile(profile) {
+  if (!profile) return;
+  promptInput.value = profile.prompt;
+  resolutionInput.value = profile.resolution;
+  stepsInput.value = profile.steps;
+  guidanceInput.value = profile.guidance_scale;
+  imageGuidanceInput.value = profile.image_guidance_scale;
+  randomSeedInput.checked = profile.seed === null;
+  if (profile.seed !== null) seedInput.value = profile.seed;
+  modelDescription.textContent = selectedNpuModel === 'hyper'
+    ? 'DISTILLED 4-STEP EDITOR · FIRST SWITCH LOADS MODEL'
+    : 'FULL 20-STEP EDITOR · BEST COMPOSITION';
+  updateSeedControl();
+  updateSettingOutputs();
+}
+
 function settingsMatch(actual, expected) {
   return actual
+    && actual.npu_model === expected.npu_model
     && actual.prompt === expected.prompt
     && actual.cloud_prompt === expected.cloud_prompt
     && actual.openrouter_model === expected.openrouter_model
@@ -244,6 +309,7 @@ function settingsMatch(actual, expected) {
     && actual.camera_contrast === expected.camera_contrast
     && actual.printer_enabled === expected.printer_enabled
     && actual.printer_threshold === expected.printer_threshold
+    && (actual.printer_dither === undefined || actual.printer_dither === expected.printer_dither)
     && actual.printer_feed_lines === expected.printer_feed_lines
     && actual.printer_heat_dots === expected.printer_heat_dots
     && actual.printer_heat_time === expected.printer_heat_time
@@ -251,3 +317,5 @@ function settingsMatch(actual, expected) {
     && actual.printer_density === expected.printer_density
     && actual.printer_break_time === expected.printer_break_time;
 }
+
+selectMode('normal', false);

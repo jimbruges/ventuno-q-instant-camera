@@ -31,6 +31,24 @@ DEFAULT_NPU_PROMPT = "Please replace the just the head of any human in this imag
 DEFAULT_CLOUD_PROMPT = "Place the person from the second reference image naturally into the scene in the first image. Keep their face, body, clothes, and identity recognizable. If people are present, pose them together; otherwise place the person naturally in the background. Preserve the scene, lighting, camera angle, and realistic photographic style."
 OUTPUT_WIDTH = 200
 MODE_NAMES = {"normal": 0, "cloud": 1, "local": 2}
+NPU_MODEL_DEFAULTS = {
+    "standard": {
+        "prompt": DEFAULT_NPU_PROMPT,
+        "resolution": 512,
+        "steps": 20,
+        "guidance_scale": 7.5,
+        "image_guidance_scale": 1.5,
+        "seed": None,
+    },
+    "hyper": {
+        "prompt": "a photorealistic person holding the reference object naturally",
+        "resolution": 384,
+        "steps": 4,
+        "guidance_scale": 1.0,
+        "image_guidance_scale": 1.0,
+        "seed": None,
+    },
+}
 
 logger = Logger("InstantMeCamera")
 ui = WebUI()
@@ -72,6 +90,7 @@ def load_config():
         "npu_guidance_scale": float(os.getenv("NPU_GUIDANCE_SCALE", "7.5")),
         "npu_image_guidance_scale": float(os.getenv("NPU_IMAGE_GUIDANCE_SCALE", "1.5")),
         "npu_seed": None,
+        "npu_model": os.getenv("NPU_MODEL", "standard"),
         "cloud_prompt": os.getenv("CLOUD_PROMPT", DEFAULT_CLOUD_PROMPT),
         "identity_prompt": os.getenv("IDENTITY_PROMPT", "candid instant camera photograph, a man img naturally joining the people in the scene"),
         "sd_cli": os.getenv("SD_CLI", str(Path.home() / "instant-camera-ai" / "bin" / "sd-cli")),
@@ -87,7 +106,8 @@ def load_config():
         "camera_brightness": float(os.getenv("CAMERA_BRIGHTNESS", "0")),
         "camera_contrast": float(os.getenv("CAMERA_CONTRAST", "1")),
         "printer_enabled": os.getenv("PRINTER_ENABLED", "true").lower() not in {"0", "false", "no"},
-        "printer_threshold": int(os.getenv("PRINTER_THRESHOLD", "125")),
+        "printer_threshold": int(os.getenv("PRINTER_THRESHOLD", "96")),
+        "printer_dither": os.getenv("PRINTER_DITHER", "true").lower() not in {"0", "false", "no"},
         "printer_feed_lines": int(os.getenv("PRINTER_FEED_LINES", "3")),
         "printer_heat_dots": int(os.getenv("PRINTER_HEAT_DOTS", "5")),
         "printer_heat_time": int(os.getenv("PRINTER_HEAT_TIME", "162")),
@@ -97,6 +117,25 @@ def load_config():
     }
     if CONFIG_PATH.exists():
         config.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+    profiles = {
+        name: dict(defaults) for name, defaults in NPU_MODEL_DEFAULTS.items()
+    }
+    saved_profiles = config.get("npu_profiles", {})
+    if isinstance(saved_profiles, dict):
+        for name, profile in saved_profiles.items():
+            if name in profiles and isinstance(profile, dict):
+                profiles[name].update(profile)
+    if not saved_profiles:
+        profiles["standard"].update({
+            "prompt": config["npu_prompt"],
+            "steps": config["npu_steps"],
+            "guidance_scale": config["npu_guidance_scale"],
+            "image_guidance_scale": config["npu_image_guidance_scale"],
+            "seed": config["npu_seed"],
+        })
+    config["npu_profiles"] = profiles
+    if config["npu_model"] not in profiles:
+        config["npu_model"] = "standard"
     return config
 
 
@@ -132,19 +171,23 @@ def snapshot_state():
             if NPU_REFERENCE_PATH.exists()
             else None
         )
+        npu_profile = config["npu_profiles"][config["npu_model"]]
         result["settings"] = {
-            "prompt": config["npu_prompt"],
+            "npu_model": config["npu_model"],
+            "npu_profiles": config["npu_profiles"],
+            "prompt": npu_profile["prompt"],
             "cloud_prompt": config["cloud_prompt"],
             "openrouter_model": config["openrouter_model"],
-            "resolution": config["generation_width"],
-            "steps": config["npu_steps"],
-            "guidance_scale": config["npu_guidance_scale"],
-            "image_guidance_scale": config["npu_image_guidance_scale"],
-            "seed": config["npu_seed"],
+            "resolution": npu_profile["resolution"],
+            "steps": npu_profile["steps"],
+            "guidance_scale": npu_profile["guidance_scale"],
+            "image_guidance_scale": npu_profile["image_guidance_scale"],
+            "seed": npu_profile["seed"],
             "camera_brightness": config["camera_brightness"],
             "camera_contrast": config["camera_contrast"],
             "printer_enabled": config["printer_enabled"],
             "printer_threshold": config["printer_threshold"],
+            "printer_dither": config["printer_dither"],
             "printer_feed_lines": config["printer_feed_lines"],
             "printer_heat_dots": config["printer_heat_dots"],
             "printer_heat_time": config["printer_heat_time"],
@@ -204,12 +247,16 @@ def capture_frame(destination):
         raise RuntimeError(f"Camera capture failed: {exc}") from exc
 
 
-def prepare_scene(source, destination):
+def prepare_scene(source, destination, mode):
     with Image.open(source) as image:
         prepared = image.convert("RGB")
         if config["camera_rotation"]:
             prepared = prepared.rotate(config["camera_rotation"], expand=True)
-        generation_width = config["generation_width"]
+        generation_width = (
+            config["npu_profiles"][config["npu_model"]]["resolution"]
+            if mode == "local"
+            else config["generation_width"]
+        )
         generation_height = round(generation_width * prepared.height / prepared.width)
         prepared.resize(
             (generation_width, generation_height), Image.Resampling.LANCZOS
@@ -245,13 +292,16 @@ def generate_local(scene, output):
 
 
 def generate_npu(scene, output):
-    seed = config["npu_seed"]
+    model = config["npu_model"]
+    profile = config["npu_profiles"][model]
+    seed = profile["seed"]
     payload = {
-        "prompt": config["npu_prompt"],
+        "model": model,
+        "prompt": profile["prompt"],
         "image": base64.b64encode(scene.read_bytes()).decode("ascii"),
-        "steps": config["npu_steps"],
-        "guidance_scale": config["npu_guidance_scale"],
-        "image_guidance_scale": config["npu_image_guidance_scale"],
+        "steps": profile["steps"],
+        "guidance_scale": profile["guidance_scale"],
+        "image_guidance_scale": profile["image_guidance_scale"],
         "seed": seed if seed is not None else time.time_ns() & 0x7FFFFFFF,
     }
     if NPU_REFERENCE_PATH.exists():
@@ -363,7 +413,7 @@ def finish_image(generated, output):
 
 def create_print_raster(image_path, output_path):
     with Image.open(image_path) as image:
-        raster = receipt_raster(image, 384, config["printer_threshold"])
+        raster = receipt_raster(image, 384, config["printer_threshold"], config["printer_dither"])
     raster.save(output_path, optimize=True)
     return raster
 
@@ -415,7 +465,7 @@ def process_capture(mode="normal", source="hardware"):
         time.sleep(0.6)
         publish("capture", "Capturing scene", True)
         capture_frame(original)
-        prepare_scene(original, scene)
+        prepare_scene(original, scene, mode)
         if mode == "normal":
             publish("generating", "Preparing the normal photo", True)
             shutil.copyfile(scene, generated)
@@ -521,6 +571,7 @@ def on_get_state(client, _data):
 
 def on_set_settings(client, data):
     try:
+        npu_model = str(data.get("npu_model", "")).strip()
         prompt = str(data.get("prompt", "")).strip()
         cloud_prompt = str(data.get("cloud_prompt", "")).strip()
         openrouter_model = str(data.get("openrouter_model", "")).strip()
@@ -534,12 +585,15 @@ def on_set_settings(client, data):
         camera_contrast = float(data.get("camera_contrast"))
         printer_enabled = bool(data.get("printer_enabled"))
         printer_threshold = int(data.get("printer_threshold"))
+        printer_dither = bool(data.get("printer_dither"))
         printer_feed_lines = int(data.get("printer_feed_lines"))
         printer_heat_dots = int(data.get("printer_heat_dots"))
         printer_heat_time = int(data.get("printer_heat_time"))
         printer_heat_interval = int(data.get("printer_heat_interval"))
         printer_density = int(data.get("printer_density"))
         printer_break_time = int(data.get("printer_break_time"))
+        if npu_model not in NPU_MODEL_DEFAULTS:
+            raise ValueError("Local model must be standard or hyper")
         if not prompt or len(prompt) > 500:
             raise ValueError("Prompt must contain 1 to 500 characters")
         if not cloud_prompt or len(cloud_prompt) > 800:
@@ -548,6 +602,11 @@ def on_set_settings(client, data):
             raise ValueError("OpenRouter model must be a Google model ID")
         if resolution not in (256, 384, 512):
             raise ValueError("Input resolution must be 256, 384, or 512")
+        expected_resolution = NPU_MODEL_DEFAULTS[npu_model]["resolution"]
+        if resolution != expected_resolution:
+            raise ValueError(
+                f"{npu_model.title()} model requires {expected_resolution}px input"
+            )
         if not 4 <= steps <= 30:
             raise ValueError("Steps must be between 4 and 30")
         if not 1.0 <= guidance_scale <= 15.0:
@@ -577,19 +636,23 @@ def on_set_settings(client, data):
         with state_lock:
             if state["busy"]:
                 raise ValueError("Settings cannot change while a photo is processing")
+            config["npu_model"] = npu_model
+            config["npu_profiles"][npu_model] = {
+                "prompt": prompt,
+                "resolution": resolution,
+                "steps": steps,
+                "guidance_scale": guidance_scale,
+                "image_guidance_scale": image_guidance_scale,
+                "seed": seed,
+            }
             config.update({
-                "npu_prompt": prompt,
                 "cloud_prompt": cloud_prompt,
                 "openrouter_model": openrouter_model,
-                "generation_width": resolution,
-                "npu_steps": steps,
-                "npu_guidance_scale": guidance_scale,
-                "npu_image_guidance_scale": image_guidance_scale,
-                "npu_seed": seed,
                 "camera_brightness": camera_brightness,
                 "camera_contrast": camera_contrast,
                 "printer_enabled": printer_enabled,
                 "printer_threshold": printer_threshold,
+                "printer_dither": printer_dither,
                 "printer_feed_lines": printer_feed_lines,
                 "printer_heat_dots": printer_heat_dots,
                 "printer_heat_time": printer_heat_time,
