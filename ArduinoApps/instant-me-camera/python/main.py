@@ -390,6 +390,7 @@ def configure_printer():
 def set_active_mode(mode):
     with state_lock:
         state["active_mode"] = mode
+    ui.send_message("camera_state", snapshot_state())
     try:
         Bridge.notify("set_active_mode", MODE_NAMES.get(mode, -1))
     except Exception as exc:
@@ -596,8 +597,12 @@ def on_set_settings(client, data):
                 "printer_density": printer_density,
                 "printer_break_time": printer_break_time,
             })
+            saved_config = dict(config)
+        temporary_config = CONFIG_PATH.with_suffix(".json.tmp")
+        temporary_config.write_text(json.dumps(saved_config, indent=2) + "\n", encoding="utf-8")
+        temporary_config.replace(CONFIG_PATH)
         ui.send_message("camera_state", snapshot_state())
-    except (TypeError, ValueError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         ui.send_message("settings_error", {"message": str(exc)}, client)
 
 
