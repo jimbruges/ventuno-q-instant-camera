@@ -18,7 +18,7 @@ def packed_printer_bytes(raster):
     return inverted.convert("1").tobytes()
 
 
-def send_to_printer(raster, bridge, feed_lines=3, rows_per_chunk=4):
+def send_to_printer(raster, bridge, feed_lines=3, rows_per_chunk=2):
     if raster.width != 384:
         raise ValueError("Printer raster must be 384 pixels wide")
     packed = packed_printer_bytes(raster)

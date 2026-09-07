@@ -25,9 +25,9 @@
   "printer_enabled": true,
   "printer_threshold": 125,
   "printer_feed_lines": 3,
-  "printer_heat_dots": 11,
-  "printer_heat_time": 120,
+  "printer_heat_dots": 5,
+  "printer_heat_time": 162,
   "printer_heat_interval": 40,
-  "printer_density": 10,
+  "printer_density": 4,
   "printer_break_time": 2
 }

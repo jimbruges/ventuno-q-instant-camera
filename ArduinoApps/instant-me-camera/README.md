@@ -12,7 +12,7 @@ A button LED is steady only while that mode is available. Button B remains dark 
 
 ## Thermal printer wiring
 
-The printer is driven at 19200 baud through `Serial1`:
+The printer is driven at 9600 baud (8-N-1) through `Serial1`:
 
 - VENTUNO Q D1 / TX to printer RX.
 - VENTUNO Q GND to printer GND.

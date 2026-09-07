@@ -89,10 +89,10 @@ def load_config():
         "printer_enabled": os.getenv("PRINTER_ENABLED", "true").lower() not in {"0", "false", "no"},
         "printer_threshold": int(os.getenv("PRINTER_THRESHOLD", "125")),
         "printer_feed_lines": int(os.getenv("PRINTER_FEED_LINES", "3")),
-        "printer_heat_dots": int(os.getenv("PRINTER_HEAT_DOTS", "11")),
-        "printer_heat_time": int(os.getenv("PRINTER_HEAT_TIME", "120")),
+        "printer_heat_dots": int(os.getenv("PRINTER_HEAT_DOTS", "5")),
+        "printer_heat_time": int(os.getenv("PRINTER_HEAT_TIME", "162")),
         "printer_heat_interval": int(os.getenv("PRINTER_HEAT_INTERVAL", "40")),
-        "printer_density": int(os.getenv("PRINTER_DENSITY", "10")),
+        "printer_density": int(os.getenv("PRINTER_DENSITY", "4")),
         "printer_break_time": int(os.getenv("PRINTER_BREAK_TIME", "2")),
     }
     if CONFIG_PATH.exists():

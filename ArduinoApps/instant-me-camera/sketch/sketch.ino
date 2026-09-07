@@ -37,7 +37,7 @@ void setup() {
   matrix.begin();
   matrix.setGrayscaleBits(3);
   matrix.clear();
-  Serial1.begin(19200);
+  Serial1.begin(9600);
   printer.begin();
   Bridge.begin();
   Bridge.provide("camera_status", setCameraStatus);
@@ -163,7 +163,7 @@ bool cancelPrint() {
 bool configurePrinter(uint8_t heatDots, uint8_t heatTime, uint8_t heatInterval, uint8_t density, uint8_t breakTime) {
   if (printJobActive || heatDots < 1 || heatDots > 30 || heatTime < 3 || density > 20 || breakTime > 7) return false;
   printer.setHeatConfig(heatDots, heatTime, heatInterval);
-  printer.setPrintDensity(density, breakTime);
+  printer.setPrintDensity(breakTime, density);
   return true;
 }
 
