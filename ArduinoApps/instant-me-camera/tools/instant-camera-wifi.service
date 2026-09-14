@@ -1,0 +1,11 @@
+[Unit]
+Description=Instant camera Wi-Fi provisioning helper
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/ArduinoApps/instant-me-camera/tools/wifi_provision_host.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

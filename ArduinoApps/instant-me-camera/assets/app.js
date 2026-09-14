@@ -14,9 +14,17 @@ const elapsed = document.querySelector('#elapsed');
 const settingsForm = document.querySelector('#settings-form');
 const settingsStatus = document.querySelector('#settings-status');
 const settingsTitle = document.querySelector('#settings-title');
+const profileModeInput = document.querySelector('#profile-mode');
 const promptInput = document.querySelector('#prompt');
 const cloudPromptInput = document.querySelector('#cloud-prompt');
 const openrouterModelInput = document.querySelector('#openrouter-model');
+const openrouterApiKeyInput = document.querySelector('#openrouter-api-key');
+const openrouterKeyStatus = document.querySelector('#openrouter-key-status');
+const removeOpenrouterKey = document.querySelector('#remove-openrouter-key');
+const cloudReferenceInput = document.querySelector('#cloud-reference-input');
+const cloudReferencePreview = document.querySelector('#cloud-reference-preview');
+const cloudReferenceName = document.querySelector('#cloud-reference-name');
+const removeCloudReference = document.querySelector('#remove-cloud-reference');
 const npuModelInput = document.querySelector('#npu-model');
 const modelDescription = document.querySelector('#model-description');
 const resolutionInput = document.querySelector('#resolution');
@@ -44,24 +52,29 @@ const printerDensityInput = document.querySelector('#printer-density');
 const printerBreakTimeInput = document.querySelector('#printer-break-time');
 const testPrint = document.querySelector('#test-print');
 const capture = document.querySelector('#capture');
-const modeButtons = [...document.querySelectorAll('.mode-button')];
+const profileButtons = [...document.querySelectorAll('.mode-button')];
 const modePanels = [...document.querySelectorAll('.mode-panel')];
 let startedAt = 0;
 let timer = 0;
 let settingsDirty = false;
 let pendingSettings = null;
 let captureAfterSettingsSave = false;
+let selectedProfileId = 'a_short';
 let selectedMode = 'normal';
 let currentAvailability = {};
-let modelProfiles = {};
+let buttonProfiles = {};
+let modelDefaults = {};
+let profileReferences = {};
 let selectedNpuModel = 'standard';
+let removeSavedOpenrouterKey = false;
 
 ui.on_connect(() => { connection.textContent = 'BOARD ONLINE'; connection.classList.add('online'); ui.send_message('get_state'); });
-ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; capture.disabled = true; modeButtons.forEach(button => { button.disabled = true; }); });
+ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; capture.disabled = true; profileButtons.forEach(button => { button.disabled = true; }); });
 ui.on_message('camera_state', render);
 ui.on_message('settings_error', ({ message: error }) => {
   pendingSettings = null;
   captureAfterSettingsSave = false;
+  settingsDirty = true;
   settingsStatus.textContent = error;
   settingsStatus.className = 'error';
 });
@@ -72,24 +85,27 @@ function requestSelectedCapture() {
   } else if (pendingSettings) {
     captureAfterSettingsSave = true;
   } else {
-    ui.send_message('take_photo', { mode: selectedMode });
+    ui.send_message('take_photo', { profile_id: selectedProfileId });
   }
 }
 shutter.addEventListener('click', requestSelectedCapture);
 capture.addEventListener('click', requestSelectedCapture);
-modeButtons.forEach(button => button.addEventListener('click', () => selectMode(button.dataset.mode)));
+profileButtons.forEach(button => button.addEventListener('click', () => selectProfile(button.dataset.profileId)));
 testPrint.addEventListener('click', () => ui.send_message('test_print'));
 settingsForm.addEventListener('input', () => { settingsDirty = true; settingsStatus.textContent = 'UNSAVED'; settingsStatus.className = ''; updateSettingOutputs(); });
 settingsForm.addEventListener('submit', event => {
   event.preventDefault();
   settingsDirty = false;
   settingsStatus.textContent = 'SAVING';
-  modelProfiles[selectedNpuModel] = readLocalProfile();
   pendingSettings = {
+    profile_id: selectedProfileId,
+    mode: selectedMode,
     npu_model: selectedNpuModel,
     prompt: promptInput.value,
     cloud_prompt: cloudPromptInput.value,
     openrouter_model: openrouterModelInput.value,
+    openrouter_api_key: openrouterApiKeyInput.value,
+    remove_openrouter_api_key: removeSavedOpenrouterKey,
     resolution: Number(resolutionInput.value),
     steps: Number(stepsInput.value),
     guidance_scale: Number(guidanceInput.value),
@@ -108,23 +124,40 @@ settingsForm.addEventListener('submit', event => {
     printer_break_time: Number(printerBreakTimeInput.value),
   };
   ui.send_message('set_settings', pendingSettings);
+  openrouterApiKeyInput.value = '';
+});
+removeOpenrouterKey.addEventListener('click', () => {
+  openrouterApiKeyInput.value = '';
+  removeSavedOpenrouterKey = true;
+  settingsDirty = true;
+  settingsStatus.textContent = 'KEY WILL BE REMOVED';
+  settingsStatus.className = '';
+});
+openrouterApiKeyInput.addEventListener('input', () => {
+  if (openrouterApiKeyInput.value) removeSavedOpenrouterKey = false;
 });
 npuModelInput.addEventListener('change', () => {
-  modelProfiles[selectedNpuModel] = readLocalProfile();
   selectedNpuModel = npuModelInput.value;
-  loadLocalProfile(modelProfiles[selectedNpuModel]);
+  loadLocalProfile(modelDefaults[selectedNpuModel]);
   settingsDirty = true;
   settingsStatus.textContent = 'UNSAVED';
   settingsStatus.className = '';
 });
+profileModeInput.addEventListener('change', () => {
+  selectedMode = profileModeInput.value;
+  showModePanel(selectedMode);
+  updateSelectedProfileButton();
+});
 randomSeedInput.addEventListener('change', updateSeedControl);
-referenceInput.addEventListener('change', () => {
-  const [file] = referenceInput.files;
+function bindReferenceControl(input, remove) {
+input.addEventListener('change', () => {
+  const [file] = input.files;
   if (!file) return;
+  const profileId = selectedProfileId;
   if (file.size > 9 * 1024 * 1024) {
     settingsStatus.textContent = 'REFERENCE IMAGE IS TOO LARGE';
     settingsStatus.className = 'error';
-    referenceInput.value = '';
+    input.value = '';
     return;
   }
   const reader = new FileReader();
@@ -137,41 +170,54 @@ referenceInput.addEventListener('change', () => {
       canvas.height = Math.round(image.naturalHeight * scale);
       canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
       settingsStatus.textContent = 'UPLOADING REFERENCE';
-      ui.send_message('set_reference', { data_url: canvas.toDataURL('image/jpeg', 0.9) });
-      referenceInput.value = '';
+      ui.send_message('set_reference', { profile_id: profileId, data_url: canvas.toDataURL('image/jpeg', 0.9) });
+      input.value = '';
     });
     image.addEventListener('error', () => {
       settingsStatus.textContent = 'FAILED TO LOAD REFERENCE';
       settingsStatus.className = 'error';
-      referenceInput.value = '';
+      input.value = '';
     });
     image.src = reader.result;
   });
   reader.readAsDataURL(file);
 });
-removeReference.addEventListener('click', () => {
+remove.addEventListener('click', () => {
   settingsStatus.textContent = 'REMOVING REFERENCE';
-  ui.send_message('set_reference', { data_url: '' });
+  ui.send_message('set_reference', { profile_id: selectedProfileId, data_url: '' });
 });
+}
+bindReferenceControl(referenceInput, removeReference);
+bindReferenceControl(cloudReferenceInput, removeCloudReference);
 
 function render(state) {
   statusText.textContent = state.status.toUpperCase();
   message.textContent = state.message;
-  backend.textContent = state.active_mode ? state.active_mode.toUpperCase() : 'THREE MODE';
+  backend.textContent = state.active_gesture
+    ? `${formatProfileName(state.active_gesture)} · ${state.active_mode.toUpperCase()}`
+    : 'SIX PROFILES';
   shutter.disabled = state.busy;
   const availability = state.availability || {};
   currentAvailability = availability;
-  modeButtons.forEach(button => {
-    const available = Boolean(availability[button.dataset.mode]);
+  if (state.settings) {
+    modelDefaults = structuredClone(state.settings.npu_model_defaults || {});
+    if (!settingsDirty) buttonProfiles = structuredClone(state.settings.button_profiles || {});
+  }
+  profileReferences = state.profile_references || {};
+  profileButtons.forEach(button => {
+    const profileId = button.dataset.profileId;
+    const available = Boolean(availability[profileId]);
+    const profile = buttonProfiles[profileId];
     button.disabled = state.busy;
     button.classList.toggle('available', available);
-    button.classList.toggle('selected', selectedMode === button.dataset.mode);
-    button.classList.toggle('active', state.active_mode === button.dataset.mode);
+    button.classList.toggle('selected', selectedProfileId === profileId);
+    button.classList.toggle('active', state.active_gesture === profileId);
+    if (profile) button.querySelector('[data-profile-mode]').textContent = profile.mode.toUpperCase();
   });
   modePanels.forEach(panel => { panel.disabled = state.busy || panel.hidden; });
   [...settingsForm.querySelectorAll('.common-panel')].forEach(panel => { panel.disabled = state.busy; });
   applySettings.disabled = state.busy;
-  capture.disabled = state.busy || !availability[selectedMode];
+  capture.disabled = state.busy || !availability[selectedProfileId];
   progress.classList.toggle('active', state.busy);
   if (state.busy && !startedAt) {
     startedAt = Date.now();
@@ -201,12 +247,9 @@ function render(state) {
     return figure;
   }));
   if (state.settings && !settingsDirty) {
-    modelProfiles = structuredClone(state.settings.npu_profiles || {});
-    selectedNpuModel = state.settings.npu_model || 'standard';
-    npuModelInput.value = selectedNpuModel;
-    loadLocalProfile(modelProfiles[selectedNpuModel] || state.settings);
-    cloudPromptInput.value = state.settings.cloud_prompt;
-    openrouterModelInput.value = state.settings.openrouter_model;
+    loadSelectedProfile();
+    openrouterApiKeyInput.value = '';
+    removeSavedOpenrouterKey = false;
     brightnessInput.value = state.settings.camera_brightness;
     contrastInput.value = state.settings.camera_contrast;
     printerEnabledInput.checked = state.settings.printer_enabled;
@@ -223,30 +266,79 @@ function render(state) {
     updateSeedControl();
     updateSettingOutputs();
   }
+  const keySource = state.openrouter_key_source;
+  openrouterKeyStatus.textContent = keySource === 'saved' ? 'SAVED ON DEVICE' : keySource === 'environment' ? 'APP CONFIGURATION' : 'NOT CONFIGURED';
+  openrouterApiKeyInput.placeholder = state.openrouter_key_ready ? 'LEAVE BLANK TO KEEP CURRENT KEY' : 'PASTE OPENROUTER KEY';
+  removeOpenrouterKey.disabled = state.busy || keySource !== 'saved';
   if (pendingSettings && settingsMatch(state.settings, pendingSettings)) {
     pendingSettings = null;
     if (captureAfterSettingsSave) {
       captureAfterSettingsSave = false;
-      ui.send_message('take_photo', { mode: selectedMode });
+      ui.send_message('take_photo', { profile_id: selectedProfileId });
     }
   }
-  const hasReference = Boolean(state.npu_reference);
-  referencePreview.style.display = hasReference ? 'block' : 'none';
-  removeReference.style.display = hasReference ? 'block' : 'none';
-  referenceName.textContent = hasReference ? 'REFERENCE READY' : 'NONE SELECTED';
-  if (hasReference) referencePreview.src = state.npu_reference;
+  renderSelectedReference();
 }
 
-function selectMode(mode, scroll = true) {
-  selectedMode = mode;
-  settingsTitle.textContent = `${mode.toUpperCase()} SETTINGS`;
+function selectProfile(profileId, scroll = true) {
+  if (settingsDirty) {
+    settingsStatus.textContent = 'APPLY SETTINGS BEFORE SWITCHING PROFILE';
+    settingsStatus.className = 'error';
+    return;
+  }
+  selectedProfileId = profileId;
+  loadSelectedProfile();
+  profileButtons.forEach(button => button.classList.toggle('selected', button.dataset.profileId === profileId));
+  capture.disabled = !currentAvailability[profileId];
+  if (scroll) document.querySelector('.settings').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function showModePanel(mode) {
   modePanels.forEach(panel => {
     panel.hidden = panel.dataset.settingsMode !== mode;
     panel.disabled = panel.hidden;
   });
-  modeButtons.forEach(button => button.classList.toggle('selected', button.dataset.mode === mode));
-  capture.disabled = !currentAvailability[mode];
-  if (scroll) document.querySelector('.settings').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function formatProfileName(profileId) {
+  const [button, press] = profileId.split('_');
+  return `${button.toUpperCase()} ${press.toUpperCase()} PRESS`;
+}
+
+function updateSelectedProfileButton() {
+  const button = profileButtons.find(item => item.dataset.profileId === selectedProfileId);
+  if (button) button.querySelector('[data-profile-mode]').textContent = selectedMode.toUpperCase();
+}
+
+function loadSelectedProfile() {
+  const profile = buttonProfiles[selectedProfileId];
+  if (!profile) return;
+  selectedMode = profile.mode;
+  selectedNpuModel = profile.npu_model;
+  settingsTitle.textContent = formatProfileName(selectedProfileId);
+  profileModeInput.value = selectedMode;
+  npuModelInput.value = selectedNpuModel;
+  loadLocalProfile(profile);
+  cloudPromptInput.value = profile.cloud_prompt;
+  openrouterModelInput.value = profile.openrouter_model;
+  showModePanel(selectedMode);
+  updateSelectedProfileButton();
+  renderSelectedReference();
+}
+
+function renderSelectedReference() {
+  const referenceUrl = profileReferences[selectedProfileId];
+  const hasReference = Boolean(referenceUrl);
+  referencePreview.style.display = hasReference ? 'block' : 'none';
+  removeReference.style.display = hasReference ? 'block' : 'none';
+  referenceName.textContent = hasReference ? 'REFERENCE READY' : 'NONE SELECTED';
+  cloudReferencePreview.style.display = hasReference ? 'block' : 'none';
+  removeCloudReference.style.display = hasReference ? 'block' : 'none';
+  cloudReferenceName.textContent = hasReference ? 'CONTEXT READY' : 'NONE SELECTED';
+  if (hasReference) {
+    referencePreview.src = referenceUrl;
+    cloudReferencePreview.src = referenceUrl;
+  }
 }
 
 function updateElapsed() {
@@ -295,16 +387,19 @@ function loadLocalProfile(profile) {
 }
 
 function settingsMatch(actual, expected) {
+  const profile = actual && actual.button_profiles && actual.button_profiles[expected.profile_id];
   return actual
-    && actual.npu_model === expected.npu_model
-    && actual.prompt === expected.prompt
-    && actual.cloud_prompt === expected.cloud_prompt
-    && actual.openrouter_model === expected.openrouter_model
-    && actual.resolution === expected.resolution
-    && actual.steps === expected.steps
-    && actual.guidance_scale === expected.guidance_scale
-    && actual.image_guidance_scale === expected.image_guidance_scale
-    && actual.seed === expected.seed
+    && profile
+    && profile.mode === expected.mode
+    && profile.npu_model === expected.npu_model
+    && profile.prompt === expected.prompt
+    && profile.cloud_prompt === expected.cloud_prompt
+    && profile.openrouter_model === expected.openrouter_model
+    && profile.resolution === expected.resolution
+    && profile.steps === expected.steps
+    && profile.guidance_scale === expected.guidance_scale
+    && profile.image_guidance_scale === expected.image_guidance_scale
+    && profile.seed === expected.seed
     && actual.camera_brightness === expected.camera_brightness
     && actual.camera_contrast === expected.camera_contrast
     && actual.printer_enabled === expected.printer_enabled
@@ -318,4 +413,4 @@ function settingsMatch(actual, expected) {
     && actual.printer_break_time === expected.printer_break_time;
 }
 
-selectMode('normal', false);
+showModePanel('normal');

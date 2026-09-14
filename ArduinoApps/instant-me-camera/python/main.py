@@ -1,6 +1,8 @@
 import base64
+import copy
 import io
 import json
+import math
 import os
 import queue
 import socket
@@ -14,10 +16,11 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat
 from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App, Bridge, Logger
 from receipt_effects import receipt_raster, send_to_printer
+from wifi_setup import connect_wifi, scan_wifi_qr
 
 
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -25,12 +28,22 @@ ASSETS_DIR = APP_DIR / "assets"
 CAPTURES_DIR = ASSETS_DIR / "captures"
 REFERENCE_PATH = ASSETS_DIR / "reference" / "me.jpg"
 NPU_REFERENCE_PATH = ASSETS_DIR / "reference" / "object.jpg"
+PROFILE_REFERENCE_DIR = ASSETS_DIR / "reference" / "profiles"
 CONFIG_PATH = APP_DIR / "config.json"
+SECRETS_PATH = APP_DIR / ".secrets.json"
 DEFAULT_PROMPT = "same room, candid realistic instant camera photograph, one large yellow rubber duck centered on the floor in the masked area"
 DEFAULT_NPU_PROMPT = "Please replace the just the head of any human in this image with a large rubber duck. Preserve every person, their clothes, the room, lighting, and camera angle."
 DEFAULT_CLOUD_PROMPT = "Place the person from the second reference image naturally into the scene in the first image. Keep their face, body, clothes, and identity recognizable. If people are present, pose them together; otherwise place the person naturally in the background. Preserve the scene, lighting, camera angle, and realistic photographic style."
 OUTPUT_WIDTH = 200
 MODE_NAMES = {"normal": 0, "cloud": 1, "local": 2}
+PROFILE_IDS = (
+    "a_short", "b_short", "c_short",
+    "a_long", "b_long", "c_long",
+)
+DEFAULT_PROFILE_MODES = {
+    "a_short": "normal", "b_short": "cloud", "c_short": "local",
+    "a_long": "normal", "b_long": "cloud", "c_long": "local",
+}
 NPU_MODEL_DEFAULTS = {
     "standard": {
         "prompt": DEFAULT_NPU_PROMPT,
@@ -55,6 +68,7 @@ ui = WebUI()
 jobs = queue.Queue(maxsize=1)
 state_lock = threading.Lock()
 printer_lock = threading.Lock()
+wifi_cancel_event = threading.Event()
 state = {
     "status": "ready",
     "message": "Ready",
@@ -62,7 +76,8 @@ state = {
     "camera": "/dev/video0",
     "busy": False,
     "active_mode": None,
-    "availability": {"normal": False, "cloud": False, "local": False},
+    "active_gesture": None,
+    "availability": {profile_id: False for profile_id in PROFILE_IDS},
     "photos": [],
 }
 
@@ -114,6 +129,8 @@ def load_config():
         "printer_heat_interval": int(os.getenv("PRINTER_HEAT_INTERVAL", "40")),
         "printer_density": int(os.getenv("PRINTER_DENSITY", "4")),
         "printer_break_time": int(os.getenv("PRINTER_BREAK_TIME", "2")),
+        "print_height_scale": float(os.getenv("PRINT_HEIGHT_SCALE", "0.92")),
+        "wifi_scan_timeout": int(os.getenv("WIFI_SCAN_TIMEOUT", "120")),
     }
     if CONFIG_PATH.exists():
         config.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
@@ -136,12 +153,80 @@ def load_config():
     config["npu_profiles"] = profiles
     if config["npu_model"] not in profiles:
         config["npu_model"] = "standard"
+    default_local = profiles[config["npu_model"]]
+    button_profiles = {}
+    saved_button_profiles = config.get("button_profiles", {})
+    for profile_id in PROFILE_IDS:
+        profile = {
+            "mode": DEFAULT_PROFILE_MODES[profile_id],
+            "npu_model": config["npu_model"],
+            "prompt": default_local["prompt"],
+            "resolution": default_local["resolution"],
+            "steps": default_local["steps"],
+            "guidance_scale": default_local["guidance_scale"],
+            "image_guidance_scale": default_local["image_guidance_scale"],
+            "seed": default_local["seed"],
+            "cloud_prompt": config["cloud_prompt"],
+            "openrouter_model": config["openrouter_model"],
+        }
+        saved_profile = saved_button_profiles.get(profile_id, {})
+        if isinstance(saved_profile, dict):
+            profile.update(saved_profile)
+        if profile["mode"] not in MODE_NAMES:
+            profile["mode"] = DEFAULT_PROFILE_MODES[profile_id]
+        if profile["npu_model"] not in NPU_MODEL_DEFAULTS:
+            profile["npu_model"] = "standard"
+        button_profiles[profile_id] = profile
+    config["button_profiles"] = button_profiles
     return config
 
 
 config = load_config()
 state["backend"] = config["backend"]
 state["camera"] = config["camera"]
+
+
+def profile_reference_path(profile_id):
+    return PROFILE_REFERENCE_DIR / f"{profile_id}.jpg"
+
+
+def migrate_profile_references():
+    if PROFILE_REFERENCE_DIR.exists():
+        return
+    PROFILE_REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+    for profile_id, profile in config["button_profiles"].items():
+        legacy_path = REFERENCE_PATH if profile["mode"] == "cloud" else NPU_REFERENCE_PATH
+        if profile["mode"] != "normal" and legacy_path.is_file():
+            shutil.copyfile(legacy_path, profile_reference_path(profile_id))
+
+
+migrate_profile_references()
+
+
+def saved_openrouter_api_key():
+    try:
+        secrets = json.loads(SECRETS_PATH.read_text(encoding="utf-8"))
+        return str(secrets.get("openrouter_api_key", "")).strip()
+    except (AttributeError, json.JSONDecodeError, OSError):
+        return ""
+
+
+def openrouter_api_key():
+    return saved_openrouter_api_key() or os.getenv("OPENROUTER_API_KEY", "").strip()
+
+
+def save_openrouter_api_key(api_key):
+    if not api_key:
+        SECRETS_PATH.unlink(missing_ok=True)
+        return
+    temporary_secrets = SECRETS_PATH.with_suffix(".json.tmp")
+    temporary_secrets.write_text(
+        json.dumps({"openrouter_api_key": api_key}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary_secrets.chmod(0o600)
+    temporary_secrets.replace(SECRETS_PATH)
+    SECRETS_PATH.chmod(0o600)
 
 
 def photo_records():
@@ -165,24 +250,17 @@ def snapshot_state():
     with state_lock:
         result = dict(state)
         result["photos"] = photo_records()
-        result["reference_ready"] = REFERENCE_PATH.exists()
-        result["npu_reference"] = (
-            f"reference/{NPU_REFERENCE_PATH.name}?v={NPU_REFERENCE_PATH.stat().st_mtime_ns}"
-            if NPU_REFERENCE_PATH.exists()
-            else None
-        )
-        npu_profile = config["npu_profiles"][config["npu_model"]]
+        result["profile_references"] = {
+            profile_id: (
+                f"reference/profiles/{profile_id}.jpg?v={profile_reference_path(profile_id).stat().st_mtime_ns}"
+                if profile_reference_path(profile_id).is_file()
+                else None
+            )
+            for profile_id in PROFILE_IDS
+        }
         result["settings"] = {
-            "npu_model": config["npu_model"],
-            "npu_profiles": config["npu_profiles"],
-            "prompt": npu_profile["prompt"],
-            "cloud_prompt": config["cloud_prompt"],
-            "openrouter_model": config["openrouter_model"],
-            "resolution": npu_profile["resolution"],
-            "steps": npu_profile["steps"],
-            "guidance_scale": npu_profile["guidance_scale"],
-            "image_guidance_scale": npu_profile["image_guidance_scale"],
-            "seed": npu_profile["seed"],
+            "button_profiles": copy.deepcopy(config["button_profiles"]),
+            "npu_model_defaults": copy.deepcopy(NPU_MODEL_DEFAULTS),
             "camera_brightness": config["camera_brightness"],
             "camera_contrast": config["camera_contrast"],
             "printer_enabled": config["printer_enabled"],
@@ -195,7 +273,9 @@ def snapshot_state():
             "printer_density": config["printer_density"],
             "printer_break_time": config["printer_break_time"],
         }
-        result["openrouter_key_ready"] = bool(os.getenv("OPENROUTER_API_KEY"))
+        saved_key = saved_openrouter_api_key()
+        result["openrouter_key_ready"] = bool(saved_key or os.getenv("OPENROUTER_API_KEY"))
+        result["openrouter_key_source"] = "saved" if saved_key else "environment" if os.getenv("OPENROUTER_API_KEY") else None
         required = []
         if config["backend"] == "local":
             required.extend([config["sd_cli"], config["sd_model"], config["sd_lora"]])
@@ -212,18 +292,43 @@ def publish(status, message, busy=None):
         if busy is not None:
             state["busy"] = busy
     try:
-        Bridge.notify("camera_status", status)
+        Bridge.call("camera_status", status)
     except Exception as exc:
         logger.info(f"Matrix status update skipped: {exc}")
     ui.send_message("camera_state", snapshot_state())
 
 
+def resolve_camera_device():
+    configured = str(config["camera"])
+    candidates = []
+    if configured != "auto":
+        candidates.append(Path(configured))
+    candidates.extend(sorted(Path("/dev/v4l/by-id").glob("*-video-index0")))
+    candidates.extend(
+        Path("/dev") / device.name
+        for device in sorted(Path("/sys/class/video4linux").glob("video*"))
+        if "/usb" in str(device.resolve())
+    )
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        device = candidate.resolve()
+        sysfs_device = Path("/sys/class/video4linux") / device.name
+        if sysfs_device.exists() and "/usb" in str(sysfs_device.resolve()):
+            return str(device)
+    return None
+
+
 def capture_frame(destination):
+    camera_device = resolve_camera_device()
+    if camera_device is None:
+        raise RuntimeError("USB webcam is not connected")
     bundled_ffmpeg = APP_DIR / "tools" / "ffmpeg"
     ffmpeg_args = [
         "-hide_banner", "-loglevel", "error", "-y",
         "-f", "v4l2", "-input_format", "mjpeg", "-video_size", "640x480",
-        "-i", config["camera"],
+        "-i", camera_device,
+        "-ss", "0.8",
         "-vf", f"eq=brightness={config['camera_brightness']}:contrast={config['camera_contrast']}",
         "-frames:v", "1", str(destination),
     ]
@@ -234,7 +339,7 @@ def capture_frame(destination):
     elif shutil.which("docker"):
         container_output = f"/output/{destination.name}"
         command = [
-            "docker", "run", "--rm", "--device", config["camera"],
+            "docker", "run", "--rm", "--device", camera_device,
             "-v", f"{destination.parent}:/output", "alpine:3.21",
             "sh", "-c", "apk add --no-cache ffmpeg >/dev/null && exec ffmpeg \"$@\"",
             "ffmpeg", *ffmpeg_args[:-1], container_output,
@@ -247,14 +352,42 @@ def capture_frame(destination):
         raise RuntimeError(f"Camera capture failed: {exc}") from exc
 
 
-def prepare_scene(source, destination, mode):
+def enhance_scene(image):
+    sample = image.copy()
+    sample.thumbnail((160, 120), Image.Resampling.BILINEAR)
+    channel_means = ImageStat.Stat(sample).mean
+    neutral_mean = sum(channel_means) / len(channel_means)
+    gains = [
+        max(0.75, min(1.33, neutral_mean / max(channel_mean, 1.0)))
+        for channel_mean in channel_means
+    ]
+    balanced = Image.merge(
+        "RGB",
+        tuple(
+            ImageEnhance.Brightness(channel).enhance(gain)
+            for channel, gain in zip(image.split(), gains)
+        ),
+    )
+    luminance = ImageStat.Stat(sample.convert("L")).mean[0]
+    if luminance >= 110:
+        return balanced
+    gamma = max(
+        0.35,
+        min(1.0, math.log(105 / 255) / math.log(max(luminance, 1.0) / 255)),
+    )
+    lookup = [round(255 * ((value / 255) ** gamma)) for value in range(256)]
+    corrected = balanced.point(lookup * 3)
+    return ImageEnhance.Contrast(corrected).enhance(1.08)
+
+
+def prepare_scene(source, destination, profile):
     with Image.open(source) as image:
-        prepared = image.convert("RGB")
+        prepared = enhance_scene(ImageOps.exif_transpose(image).convert("RGB"))
         if config["camera_rotation"]:
             prepared = prepared.rotate(config["camera_rotation"], expand=True)
         generation_width = (
-            config["npu_profiles"][config["npu_model"]]["resolution"]
-            if mode == "local"
+            profile["resolution"]
+            if profile["mode"] == "local"
             else config["generation_width"]
         )
         generation_height = round(generation_width * prepared.height / prepared.width)
@@ -291,9 +424,8 @@ def generate_local(scene, output):
         mask_path.unlink(missing_ok=True)
 
 
-def generate_npu(scene, output):
-    model = config["npu_model"]
-    profile = config["npu_profiles"][model]
+def generate_npu(scene, output, profile, reference_path):
+    model = profile["npu_model"]
     seed = profile["seed"]
     payload = {
         "model": model,
@@ -304,9 +436,9 @@ def generate_npu(scene, output):
         "image_guidance_scale": profile["image_guidance_scale"],
         "seed": seed if seed is not None else time.time_ns() & 0x7FFFFFFF,
     }
-    if NPU_REFERENCE_PATH.exists():
+    if reference_path.is_file():
         payload["reference_image"] = base64.b64encode(
-            NPU_REFERENCE_PATH.read_bytes()
+            reference_path.read_bytes()
         ).decode("ascii")
     request = urllib.request.Request(
         config["npu_url"],
@@ -350,18 +482,37 @@ def encode_data_url(path):
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
-def generate_openrouter(scene, output):
-    api_key = os.getenv("OPENROUTER_API_KEY")
+def encode_context_data_url(path, canvas_size):
+    with Image.open(path) as image:
+        context = ImageOps.exif_transpose(image).convert("RGB")
+        context.thumbnail(canvas_size, Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", canvas_size, "white")
+    offset = (
+        (canvas.width - context.width) // 2,
+        (canvas.height - context.height) // 2,
+    )
+    canvas.paste(context, offset)
+    encoded = io.BytesIO()
+    canvas.save(encoded, format="JPEG", quality=88, optimize=True)
+    return f"data:image/jpeg;base64,{base64.b64encode(encoded.getvalue()).decode('ascii')}"
+
+
+def generate_openrouter(scene, output, profile, reference_path):
+    api_key = openrouter_api_key()
     if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is not configured in Brick Configuration")
+        raise RuntimeError("OpenRouter API key is not configured")
+    with Image.open(scene) as scene_image:
+        scene_size = scene_image.size
+        aspect_ratio = "4:3" if scene_image.width >= scene_image.height else "3:4"
     payload = {
-        "model": config["openrouter_model"],
+        "model": profile["openrouter_model"],
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": config["cloud_prompt"]},
+            {"type": "text", "text": profile["cloud_prompt"]},
             {"type": "image_url", "image_url": {"url": encode_data_url(scene)}},
-            {"type": "image_url", "image_url": {"url": encode_data_url(REFERENCE_PATH)}},
+            {"type": "image_url", "image_url": {"url": encode_context_data_url(reference_path, scene_size)}},
         ]}],
         "modalities": ["image", "text"],
+        "image_config": {"aspect_ratio": aspect_ratio},
     }
     request = urllib.request.Request(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -401,11 +552,14 @@ def generate_preview(scene, output):
         canvas.save(output)
 
 
-def finish_image(generated, output):
+def finish_image(generated, scene, output):
+    with Image.open(scene) as scene_image:
+        output_height = round(OUTPUT_WIDTH * scene_image.height / scene_image.width)
     with Image.open(generated) as image:
-        output_height = round(OUTPUT_WIDTH * image.height / image.width)
-        final = image.convert("RGB").resize(
-            (OUTPUT_WIDTH, output_height), Image.Resampling.LANCZOS
+        final = ImageOps.fit(
+            image.convert("RGB"),
+            (OUTPUT_WIDTH, output_height),
+            method=Image.Resampling.LANCZOS,
         )
         final = ImageEnhance.Contrast(final).enhance(1.12)
         final.save(output, optimize=True)
@@ -413,7 +567,13 @@ def finish_image(generated, output):
 
 def create_print_raster(image_path, output_path):
     with Image.open(image_path) as image:
-        raster = receipt_raster(image, 384, config["printer_threshold"], config["printer_dither"])
+        raster = receipt_raster(
+            image,
+            384,
+            config["printer_threshold"],
+            config["printer_dither"],
+            config["print_height_scale"],
+        )
     raster.save(output_path, optimize=True)
     return raster
 
@@ -437,17 +597,46 @@ def configure_printer():
         raise RuntimeError("Printer rejected its heat or density settings")
 
 
-def set_active_mode(mode):
+def printable_ticket_text(value, limit):
+    text = " ".join(str(value).split())
+    return text.encode("ascii", errors="replace").decode("ascii")[:limit]
+
+
+def print_wifi_ticket(title, ssid="", psk="", message=""):
+    with printer_lock:
+        configure_printer()
+        accepted = Bridge.call(
+            "print_wifi_ticket",
+            printable_ticket_text(title, 32),
+            printable_ticket_text(ssid, 32),
+            printable_ticket_text(psk, 128),
+            printable_ticket_text(message, 160),
+        )
+        if accepted is not True:
+            raise RuntimeError("Printer rejected the Wi-Fi ticket")
+
+
+def try_print_wifi_ticket(title, ssid="", psk="", message=""):
+    try:
+        print_wifi_ticket(title, ssid, psk, message)
+    except Exception as exc:
+        logger.error(f"Wi-Fi ticket could not be printed: {exc}")
+
+
+def set_active_profile(profile_id, mode):
     with state_lock:
         state["active_mode"] = mode
+        state["active_gesture"] = profile_id
     ui.send_message("camera_state", snapshot_state())
     try:
-        Bridge.notify("set_active_mode", MODE_NAMES.get(mode, -1))
+        button_index = PROFILE_IDS.index(profile_id) % 3 if profile_id else -1
+        Bridge.call("set_active_mode", button_index)
     except Exception as exc:
         logger.info(f"Button mode update skipped: {exc}")
 
 
-def process_capture(mode="normal", source="hardware"):
+def process_capture(profile_id, profile, source="hardware"):
+    mode = profile["mode"]
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     stem = f"{stamp}-{mode}"
     original = CAPTURES_DIR / f"{stem}-original.jpg"
@@ -458,25 +647,34 @@ def process_capture(mode="normal", source="hardware"):
     try:
         if mode not in MODE_NAMES:
             raise RuntimeError(f"Unknown capture mode: {mode}")
-        if not state["availability"].get(mode, False):
-            raise RuntimeError(f"{mode.title()} mode is not currently available")
-        set_active_mode(mode)
+        if not state["availability"].get(profile_id, False):
+            raise RuntimeError(f"{profile_id.replace('_', ' ').upper()} is not currently available")
+        set_active_profile(profile_id, mode)
         publish("countdown", f"Picture requested from {source}", True)
         time.sleep(0.6)
         publish("capture", "Capturing scene", True)
-        capture_frame(original)
-        prepare_scene(original, scene, mode)
+        try:
+            if Bridge.call("capture_light", True) is not True:
+                raise RuntimeError("Capture light did not turn on")
+            capture_frame(original)
+        finally:
+            try:
+                Bridge.call("capture_light", False)
+            except Exception as exc:
+                logger.error(f"Capture light did not turn off cleanly: {exc}")
+        prepare_scene(original, scene, profile)
+        reference_path = profile_reference_path(profile_id)
         if mode == "normal":
             publish("generating", "Preparing the normal photo", True)
             shutil.copyfile(scene, generated)
         elif mode == "cloud":
             publish("generating", "Composing with Nano Banana", True)
-            generate_openrouter(scene, generated)
+            generate_openrouter(scene, generated, profile, reference_path)
         else:
             publish("generating", "Applying the local AI effect", True)
-            generate_npu(scene, generated)
-        finish_image(generated, final)
-        raster = create_print_raster(generated, print_image)
+            generate_npu(scene, generated, profile, reference_path)
+        finish_image(generated, scene, final)
+        raster = create_print_raster(final, print_image)
         scene.unlink(missing_ok=True)
         generated.unlink(missing_ok=True)
         if config["printer_enabled"]:
@@ -491,22 +689,23 @@ def process_capture(mode="normal", source="hardware"):
         time.sleep(2)
         publish("ready", "Ready", False)
     finally:
-        set_active_mode(None)
+        set_active_profile(None, None)
 
 
 def worker():
     while True:
-        mode, source = jobs.get()
-        process_capture(mode, source)
+        profile_id, profile, source = jobs.get()
+        process_capture(profile_id, profile, source)
         jobs.task_done()
 
 
-def request_capture(mode, source):
+def request_capture(profile_id, source):
     with state_lock:
-        if state["busy"]:
+        if state["busy"] or profile_id not in PROFILE_IDS:
             return False
         try:
-            jobs.put_nowait((mode, source))
+            profile = copy.deepcopy(config["button_profiles"][profile_id])
+            jobs.put_nowait((profile_id, profile, source))
             state["busy"] = True
             return True
         except queue.Full:
@@ -514,12 +713,80 @@ def request_capture(mode, source):
             return False
 
 
-def on_hardware_shutter(mode="normal"):
-    request_capture(str(mode), "Modulino button")
+def on_hardware_shutter(profile_id="a_short"):
+    request_capture(str(profile_id), "Modulino button")
+
+
+def wifi_setup_worker():
+    credentials = None
+    try:
+        publish("wifi_scan", "Hold the Wi-Fi sharing QR code in front of the camera", True)
+        deadline = time.monotonic() + config["wifi_scan_timeout"]
+        camera_device = resolve_camera_device()
+        if camera_device is None:
+            raise RuntimeError("USB webcam is not connected")
+        credentials = scan_wifi_qr(
+            camera_device,
+            deadline,
+            wifi_cancel_event,
+            logger.info,
+        )
+        if wifi_cancel_event.is_set():
+            logger.info("Wi-Fi setup cancelled")
+            return
+        if credentials is None:
+            raise RuntimeError("Wi-Fi QR scan timed out")
+        logger.info(f"Wi-Fi QR decoded: SSID={credentials['ssid']!r}")
+        try_print_wifi_ticket(
+            "WIFI QR SCANNED",
+            credentials["ssid"],
+            credentials["password"],
+            "Connecting...",
+        )
+        publish("wifi_connect", "Connecting to the scanned Wi-Fi network", True)
+        connected_ssid = connect_wifi(credentials)
+        success_message = f"Wi-Fi connection successful: SSID={connected_ssid!r}"
+        logger.info(success_message)
+        try_print_wifi_ticket(
+            "WIFI CONNECTED",
+            connected_ssid,
+            message="Connection successful",
+        )
+        publish("wifi_success", "Wi-Fi connected", True)
+        time.sleep(3)
+    except Exception as exc:
+        failure_message = f"Wi-Fi connection or setup failed: {exc}"
+        logger.error(failure_message)
+        try_print_wifi_ticket(
+            "WIFI CONNECTION FAILED",
+            credentials["ssid"] if credentials else "",
+            message=str(exc),
+        )
+        publish("wifi_error", str(exc), True)
+        time.sleep(3)
+    finally:
+        wifi_cancel_event.clear()
+        publish("ready", "Ready", False)
+
+
+def on_wifi_setup():
+    with state_lock:
+        if state["busy"]:
+            return
+        state["busy"] = True
+        wifi_cancel_event.clear()
+    threading.Thread(target=wifi_setup_worker, daemon=True).start()
+
+
+def on_wifi_cancel():
+    with state_lock:
+        if state["status"] != "wifi_scan":
+            return
+    wifi_cancel_event.set()
 
 
 def on_ui_capture(_client, data):
-    request_capture(str((data or {}).get("mode", "normal")), "web control")
+    request_capture(str((data or {}).get("profile_id", "a_short")), "web control")
     ui.send_message("camera_state", snapshot_state())
 
 
@@ -571,10 +838,14 @@ def on_get_state(client, _data):
 
 def on_set_settings(client, data):
     try:
+        profile_id = str(data.get("profile_id", "")).strip()
+        mode = str(data.get("mode", "")).strip()
         npu_model = str(data.get("npu_model", "")).strip()
         prompt = str(data.get("prompt", "")).strip()
         cloud_prompt = str(data.get("cloud_prompt", "")).strip()
         openrouter_model = str(data.get("openrouter_model", "")).strip()
+        submitted_api_key = str(data.get("openrouter_api_key", "")).strip()
+        remove_api_key = bool(data.get("remove_openrouter_api_key"))
         resolution = int(data.get("resolution"))
         steps = int(data.get("steps"))
         guidance_scale = float(data.get("guidance_scale"))
@@ -592,14 +863,22 @@ def on_set_settings(client, data):
         printer_heat_interval = int(data.get("printer_heat_interval"))
         printer_density = int(data.get("printer_density"))
         printer_break_time = int(data.get("printer_break_time"))
+        if profile_id not in PROFILE_IDS:
+            raise ValueError("Unknown button gesture")
+        if mode not in MODE_NAMES:
+            raise ValueError("Mode must be Normal, Local, or Cloud")
         if npu_model not in NPU_MODEL_DEFAULTS:
             raise ValueError("Local model must be standard or hyper")
         if not prompt or len(prompt) > 500:
             raise ValueError("Prompt must contain 1 to 500 characters")
         if not cloud_prompt or len(cloud_prompt) > 800:
             raise ValueError("Cloud prompt must contain 1 to 800 characters")
-        if not openrouter_model.startswith("google/") or len(openrouter_model) > 100:
-            raise ValueError("OpenRouter model must be a Google model ID")
+        if "/" not in openrouter_model or len(openrouter_model) > 100:
+            raise ValueError("OpenRouter model must be a provider/model ID")
+        if submitted_api_key and (len(submitted_api_key) < 20 or len(submitted_api_key) > 512 or any(character.isspace() for character in submitted_api_key)):
+            raise ValueError("OpenRouter API key must contain 20 to 512 characters without spaces")
+        if submitted_api_key and remove_api_key:
+            raise ValueError("Cannot save and remove the OpenRouter API key together")
         if resolution not in (256, 384, 512):
             raise ValueError("Input resolution must be 256, 384, or 512")
         expected_resolution = NPU_MODEL_DEFAULTS[npu_model]["resolution"]
@@ -636,18 +915,19 @@ def on_set_settings(client, data):
         with state_lock:
             if state["busy"]:
                 raise ValueError("Settings cannot change while a photo is processing")
-            config["npu_model"] = npu_model
-            config["npu_profiles"][npu_model] = {
+            config["button_profiles"][profile_id] = {
+                "mode": mode,
+                "npu_model": npu_model,
                 "prompt": prompt,
                 "resolution": resolution,
                 "steps": steps,
                 "guidance_scale": guidance_scale,
                 "image_guidance_scale": image_guidance_scale,
                 "seed": seed,
-            }
-            config.update({
                 "cloud_prompt": cloud_prompt,
                 "openrouter_model": openrouter_model,
+            }
+            config.update({
                 "camera_brightness": camera_brightness,
                 "camera_contrast": camera_contrast,
                 "printer_enabled": printer_enabled,
@@ -664,6 +944,11 @@ def on_set_settings(client, data):
         temporary_config = CONFIG_PATH.with_suffix(".json.tmp")
         temporary_config.write_text(json.dumps(saved_config, indent=2) + "\n", encoding="utf-8")
         temporary_config.replace(CONFIG_PATH)
+        if submitted_api_key:
+            save_openrouter_api_key(submitted_api_key)
+        elif remove_api_key:
+            save_openrouter_api_key("")
+        refresh_availability()
         ui.send_message("camera_state", snapshot_state())
     except (OSError, TypeError, ValueError) as exc:
         ui.send_message("settings_error", {"message": str(exc)}, client)
@@ -674,9 +959,13 @@ def on_set_reference(client, data):
         with state_lock:
             if state["busy"]:
                 raise ValueError("Reference cannot change while a photo is processing")
+        profile_id = str(data.get("profile_id", ""))
+        if profile_id not in PROFILE_IDS:
+            raise ValueError("Unknown button gesture")
+        reference_path = profile_reference_path(profile_id)
         data_url = str(data.get("data_url", ""))
         if not data_url:
-            NPU_REFERENCE_PATH.unlink(missing_ok=True)
+            reference_path.unlink(missing_ok=True)
         else:
             if not data_url.startswith("data:image/") or "," not in data_url:
                 raise ValueError("Reference must be an image")
@@ -687,8 +976,8 @@ def on_set_reference(client, data):
             with Image.open(io.BytesIO(image_bytes)) as image:
                 reference = ImageOps.exif_transpose(image).convert("RGB")
                 reference.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
-                NPU_REFERENCE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                reference.save(NPU_REFERENCE_PATH, format="JPEG", quality=92)
+                reference_path.parent.mkdir(parents=True, exist_ok=True)
+                reference.save(reference_path, format="JPEG", quality=92)
         ui.send_message("camera_state", snapshot_state())
     except (OSError, TypeError, ValueError) as exc:
         ui.send_message("settings_error", {"message": str(exc)}, client)
@@ -706,23 +995,42 @@ def endpoint_reachable(url, timeout=1.0):
         return False
 
 
+def available_npu_models():
+    parsed = urllib.parse.urlparse(config["npu_url"])
+    health_url = urllib.parse.urlunparse(parsed._replace(path="/health", query=""))
+    try:
+        with urllib.request.urlopen(health_url, timeout=1.5) as response:
+            health = json.load(response)
+        if health.get("status") == "ready":
+            return set(health.get("models", []))
+    except (OSError, TypeError, ValueError, urllib.error.URLError):
+        pass
+    return set()
+
+
 def refresh_availability():
-    camera_ready = Path(config["camera"]).exists()
-    availability = {
-        "normal": camera_ready,
-        "cloud": (
-            camera_ready
-            and REFERENCE_PATH.is_file()
-            and bool(os.getenv("OPENROUTER_API_KEY"))
-            and endpoint_reachable("https://openrouter.ai", 1.5)
-        ),
-        "local": camera_ready and endpoint_reachable(config["npu_url"]),
-    }
+    camera_device = resolve_camera_device()
+    camera_ready = camera_device is not None
+    cloud_ready = bool(openrouter_api_key()) and endpoint_reachable("https://openrouter.ai", 1.5)
+    npu_models = available_npu_models()
+    availability = {}
+    for profile_id, profile in config["button_profiles"].items():
+        if profile["mode"] == "normal":
+            availability[profile_id] = camera_ready
+        elif profile["mode"] == "cloud":
+            availability[profile_id] = camera_ready and cloud_ready and profile_reference_path(profile_id).is_file()
+        else:
+            availability[profile_id] = camera_ready and profile["npu_model"] in npu_models
     with state_lock:
         changed = availability != state["availability"]
         state["availability"] = availability
+        state["camera"] = camera_device or "USB webcam not connected"
     try:
-        Bridge.notify("set_options", availability["normal"], availability["cloud"], availability["local"])
+        availability_mask = sum(
+            (1 << index) for index, profile_id in enumerate(PROFILE_IDS)
+            if availability[profile_id]
+        )
+        Bridge.call("set_options", availability_mask)
     except Exception as exc:
         logger.info(f"Button availability update skipped: {exc}")
     if changed:
@@ -730,6 +1038,8 @@ def refresh_availability():
 
 
 def availability_worker():
+    time.sleep(1)
+    publish("ready", "Ready", False)
     while True:
         refresh_availability()
         time.sleep(10)
@@ -737,6 +1047,8 @@ def availability_worker():
 
 CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 Bridge.provide("take_photo", on_hardware_shutter)
+Bridge.provide("wifi_setup", on_wifi_setup)
+Bridge.provide("wifi_cancel", on_wifi_cancel)
 ui.on_message("take_photo", on_ui_capture)
 ui.on_message("test_print", on_test_print)
 ui.on_message("reprint", on_reprint)
@@ -744,6 +1056,5 @@ ui.on_message("get_state", on_get_state)
 ui.on_message("set_settings", on_set_settings)
 ui.on_message("set_reference", on_set_reference)
 threading.Thread(target=worker, daemon=True).start()
-refresh_availability()
 threading.Thread(target=availability_worker, daemon=True).start()
 App.run()

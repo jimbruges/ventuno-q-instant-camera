@@ -4,8 +4,8 @@ from pathlib import Path
 from PIL import Image
 
 
-def receipt_raster(image, width=384, threshold=96, dither=True):
-    height = max(1, round(width * image.height / image.width))
+def receipt_raster(image, width=384, threshold=96, dither=True, height_scale=1.0):
+    height = max(1, round(width * image.height / image.width * height_scale))
     gray = image.convert("L").resize((width, height), Image.Resampling.LANCZOS)
     if dither:
         offset = 128 - threshold

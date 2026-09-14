@@ -1,6 +1,6 @@
 {
   "backend": "npu",
-  "camera": "/dev/video0",
+  "camera": "auto",
   "prompt": "same room, candid realistic instant camera photograph, one large yellow rubber duck centered on the floor in the masked area",
   "npu_prompt": "Please replace the just the head of any human in this image with a large rubber duck. Preserve every person, their clothes, the room, lighting, and camera angle.",
   "npu_url": "http://172.17.0.1:7100/edit",
@@ -27,6 +27,25 @@
       "seed": null
     }
   },
+  "button_profiles": {
+    "a_short": {
+      "mode": "normal",
+      "npu_model": "standard",
+      "prompt": "Apply the requested local edit while preserving the scene.",
+      "resolution": 512,
+      "steps": 20,
+      "guidance_scale": 7.5,
+      "image_guidance_scale": 1.5,
+      "seed": null,
+      "cloud_prompt": "Place the reference person naturally into the captured scene.",
+      "openrouter_model": "google/gemini-2.5-flash-image"
+    },
+    "b_short": { "mode": "cloud" },
+    "c_short": { "mode": "local" },
+    "a_long": { "mode": "normal" },
+    "b_long": { "mode": "cloud" },
+    "c_long": { "mode": "local" }
+  },
   "cloud_prompt": "Place the person from the second reference image naturally into the scene in the first image. Keep their face, body, clothes, and identity recognizable. If people are present, pose them together; otherwise place the person naturally in the background. Preserve the scene, lighting, camera angle, and realistic photographic style.",
   "identity_prompt": "candid instant camera photograph, a man img naturally joining the people in the scene",
   "sd_cli": "/home/arduino/instant-camera-ai/bin/sd-cli",
@@ -49,5 +68,6 @@
   "printer_heat_time": 162,
   "printer_heat_interval": 40,
   "printer_density": 4,
-  "printer_break_time": 2
+  "printer_break_time": 2,
+  "print_height_scale": 0.92
 }

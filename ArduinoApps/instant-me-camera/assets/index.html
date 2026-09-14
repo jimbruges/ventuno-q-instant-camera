@@ -28,18 +28,33 @@
         <p id="message">Ready</p>
         <time id="elapsed"></time>
       </div>
-      <div class="mode-controls" aria-label="Capture modes">
-        <button class="mode-button" data-mode="normal" type="button"><span>A</span><strong>NORMAL</strong><small>PHOTO + PRINT</small></button>
-        <button class="mode-button" data-mode="cloud" type="button"><span>B</span><strong>CLOUD</strong><small>NANO BANANA</small></button>
-        <button class="mode-button" data-mode="local" type="button"><span>C</span><strong>LOCAL</strong><small>VENTUNO AI</small></button>
+      <div class="mode-controls" aria-label="Button configurations">
+        <button class="mode-button" data-profile-id="a_short" type="button"><span>A</span><strong>SHORT PRESS</strong><small data-profile-mode>NORMAL</small></button>
+        <button class="mode-button" data-profile-id="b_short" type="button"><span>B</span><strong>SHORT PRESS</strong><small data-profile-mode>CLOUD</small></button>
+        <button class="mode-button" data-profile-id="c_short" type="button"><span>C</span><strong>SHORT PRESS</strong><small data-profile-mode>LOCAL</small></button>
+        <button class="mode-button" data-profile-id="a_long" type="button"><span>A</span><strong>LONG PRESS</strong><small data-profile-mode>NORMAL</small></button>
+        <button class="mode-button" data-profile-id="b_long" type="button"><span>B</span><strong>LONG PRESS</strong><small data-profile-mode>CLOUD</small></button>
+        <button class="mode-button" data-profile-id="c_long" type="button"><span>C</span><strong>LONG PRESS</strong><small data-profile-mode>LOCAL</small></button>
       </div>
     </section>
     <section class="settings" aria-labelledby="settings-title">
       <div class="settings-heading">
-        <div><small>EDITOR CONTROL</small><h2 id="settings-title">NORMAL SETTINGS</h2></div>
+        <div><small>BUTTON PROFILE</small><h2 id="settings-title">A SHORT PRESS</h2></div>
         <span id="settings-status" aria-live="polite"></span>
       </div>
       <form id="settings-form">
+        <fieldset class="profile-assignment">
+          <legend>BUTTON ACTION</legend>
+          <div class="settings-grid">
+            <label>CAPTURE MODE
+              <select id="profile-mode" name="mode">
+                <option value="normal">NORMAL · PHOTO + PRINT</option>
+                <option value="local">LOCAL · VENTUNO AI</option>
+                <option value="cloud">CLOUD · OPENROUTER</option>
+              </select>
+            </label>
+          </div>
+        </fieldset>
         <fieldset class="mode-panel" data-settings-mode="cloud" hidden>
           <legend>CLOUD COMPOSITION</legend>
           <label class="prompt-field">INSTRUCTION
@@ -48,6 +63,19 @@
           <label class="model-field">OPENROUTER MODEL
             <input id="openrouter-model" name="openrouter_model" type="text" maxlength="100" required>
           </label>
+          <div class="credential-control">
+            <label>OPENROUTER API KEY
+              <input id="openrouter-api-key" name="openrouter_api_key" type="password" minlength="20" maxlength="512" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="credential-status"><small>KEY STATUS</small><strong id="openrouter-key-status">NOT CONFIGURED</strong></div>
+            <button id="remove-openrouter-key" class="remove-key" type="button">REMOVE KEY</button>
+          </div>
+          <div class="reference-control">
+            <div class="reference-copy"><small>CONTEXT / PERSON IMAGE</small><strong id="cloud-reference-name">NONE SELECTED</strong></div>
+            <img id="cloud-reference-preview" alt="Nano Banana context image preview">
+            <label class="reference-upload">CHOOSE IMAGE<input id="cloud-reference-input" type="file" accept="image/jpeg,image/png,image/webp"></label>
+            <button id="remove-cloud-reference" class="remove-reference" type="button" aria-label="Remove Nano Banana context image" title="Remove Nano Banana context image">×</button>
+          </div>
         </fieldset>
         <fieldset class="mode-panel" data-settings-mode="local" hidden>
           <legend>LOCAL AI EFFECT</legend>

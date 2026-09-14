@@ -4,11 +4,32 @@ An App Lab instant camera and thermal-printing photobooth for VENTUNO Q. It can 
 
 ## Headless controls
 
-- Button A takes an unmodified photograph, archives it, and prints it.
-- Button B sends the captured scene and `assets/reference/me.jpg` to OpenRouter's `google/gemini-2.5-flash-image` (Nano Banana), asking it to place the reference person into the scene, then archives and prints the result.
-- Button C applies the configured local VENTUNO Q NPU edit, then archives and prints the result.
+- Buttons A, B, and C each have independently configurable short-press and long-press profiles.
+- Every profile can run Normal, Local, or Cloud mode with its own model, instruction, generation parameters, and reference image.
+- A press held for at least 900 ms selects the long-press profile; a shorter press selects the short-press profile.
 
-A button LED is steady only while that mode is available. Button B remains dark unless the camera, reference portrait, `OPENROUTER_API_KEY`, and internet connection are available. Button C remains dark if the local NPU endpoint cannot be reached. The selected button flashes while a job runs. The LED matrix shows ready, capture, processing/printing, success, and error states; Modulino Pixels provide the shutter flash.
+A button LED is steady when either of its profiles is available. Cloud profiles require their own reference image, an OpenRouter API key, and internet access. Local profiles require their selected NPU model to be ready. The selected button flashes while a job runs. The LED matrix shows ready, capture, processing/printing, success, and error states; Modulino Pixels provide the shutter flash.
+
+The Web UI is optional during operation. Select one of the six profile tiles, configure it, and apply its settings; profiles and reference images persist across app and board restarts. With `camera` set to `auto`, the app selects the USB webcam's stable index-0 capture interface and ignores Qualcomm camera control/codec nodes whose `/dev/video*` numbers may change between boots.
+
+## Screenless Wi-Fi setup
+
+Hold Modulino Buttons A and C together for 1.5 seconds while the camera is ready. The LED matrix changes to a scanning frame and the Modulino Pixels illuminate the QR code. Show the webcam an Android Wi-Fi sharing QR code (`WIFI:...`) within two minutes. Press any button again to cancel scanning. The matrix shows connection progress, a checkmark on success, or an X on failure, and returns to the normal ready display automatically.
+
+Wi-Fi setup supports open, WEP, WPA/WPA2, and WPA3/SAE sharing codes, including hidden networks. Network credentials are sent over an owner-only Unix socket to a host user service and are not written to the application configuration. After a successful scan, the thermal printer prints the decoded SSID and PSK, followed by a second ticket containing the connection result or failure message. The PSK is not written to application logs. The helper is installed on this board as `instant-camera-wifi.service`. To install it after copying the App to another board:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp ~/ArduinoApps/instant-me-camera/tools/instant-camera-wifi.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now instant-camera-wifi.service
+```
+
+The scan timeout defaults to 120 seconds and can be overridden with `WIFI_SCAN_TIMEOUT` in App configuration.
+
+## Startup
+
+`Instant Me Photobooth` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. Local mode becomes available after model initialization, while Normal mode requires only the USB webcam. Hyper mode additionally requires its configured removable model directory to be mounted. Cloud mode requires the webcam, reference portrait, network, and `OPENROUTER_API_KEY`.
 
 ## Thermal printer wiring
 
@@ -38,12 +59,12 @@ The build and mocked transport tests do not energize the printer. A real test pr
 - `npu`: the default, using FP16 InstructPix2Pix and IP-Adapter Plus on the VENTUNO Q HTP/NPU. It accepts a captured image, an optional reference image, and a flexible instruction, with no user-supplied mask or manual compositing.
 - `local`: CPU fallback using Realistic Vision 5.1 (SD 1.5) and the four-step Hyper-SD adapter for img2img.
 - `identity`: the slower original mode, using SDXL, PhotoMaker v1, and `assets/reference/me.jpg`.
-- `openrouter`: OpenRouter's image editing API. Set `OPENROUTER_API_KEY` in App Lab Brick Configuration, never in source or the Web UI.
+- `openrouter`: OpenRouter's image editing API. Set its API key in Cloud settings in the Web UI, or provide `OPENROUTER_API_KEY` through App Lab Brick Configuration.
 - `preview`: deterministic local composite for testing capture, hardware, and UI without model weights.
 
-Copy `config.example.json` to `config.json` to override defaults. `config.json` is optional. Settings include the NPU and cloud prompts, OpenRouter model, camera brightness/contrast, print enable, raster threshold, paper feed, heat dots/time/interval, density, and break time. The API key remains an App Lab Brick Configuration secret.
+Copy `config.example.json` to `config.json` to override defaults. `config.json` is optional. Settings include the NPU and cloud prompts, OpenRouter model, camera brightness/contrast, print enable, raster threshold, paper feed, heat dots/time/interval, density, and break time. A key entered in the Web UI is stored separately in ignored `.secrets.json` with owner-only permissions and is never returned to the browser; a blank key field preserves it.
 
-The web interface exposes all three test captures, the NPU instruction and optional `object.jpg` reference, the cloud composition prompt and model, camera processing, printer controls, a diagnostic print, and reprints from recent history. Applied values take effect on the next exposure and remain active until the App restarts. Source resolution controls preprocessing detail; the compiled editor graph always executes at 512x512.
+The web interface exposes all three test captures, the NPU instruction and optional `object.jpg` reference, the cloud composition prompt and model, camera processing, printer controls, a diagnostic print, and reprints from recent history. Applied values take effect on the next exposure and are persisted to `config.json` for future app and board restarts. Source resolution controls preprocessing detail; the compiled editor graph always executes at 512x512.
 
 The local model files are intentionally outside the App directory under `~/instant-camera-ai` so App Lab does not package several gigabytes of weights.
 

@@ -1,0 +1,6 @@
+.cache/
+.secrets.json
+.wifi-provision.sock
+.wifi-qr-frame.jpg
+**/__pycache__/
+assets/reference/profiles/

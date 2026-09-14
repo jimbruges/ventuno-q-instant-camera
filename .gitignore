@@ -8,6 +8,7 @@
 !/ArduinoApps/instant-me-camera/**
 /ArduinoApps/instant-me-camera/.cache/
 /ArduinoApps/instant-me-camera/config.json
+/ArduinoApps/instant-me-camera/.secrets.json
 /ArduinoApps/instant-me-camera/assets/captures/
 /ArduinoApps/instant-me-camera/python/__pycache__/
 /ArduinoApps/instant-me-camera/tools/ffmpeg
