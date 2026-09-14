@@ -7,6 +7,7 @@ An App Lab instant camera and thermal-printing photobooth for VENTUNO Q. It can 
 - Buttons A, B, and C each have independently configurable short-press and long-press profiles.
 - Every profile can run Normal, Local, Cloud, or Describe mode. Describe sends the captured webcam scene to the built-in local VLM and prints its text description instead of an image.
 - A press held for at least 900 ms selects the long-press profile; a shorter press selects the short-press profile.
+- Press any Modulino button while capture, generation, printing, or Wi-Fi setup is active to cancel the process and return to Ready. The Web UI shutter performs the same action while a process is active.
 
 Button A long press uses Describe by default. It runs locally through the `arduino:vlm` Brick and its configured `genie:qwen3_vl_4b_instruct` model; it does not require a cloud API key.
 

@@ -22,7 +22,7 @@ def packed_printer_bytes(raster):
     return inverted.convert("1").tobytes()
 
 
-def send_to_printer(raster, bridge, feed_lines=3, rows_per_chunk=2):
+def send_to_printer(raster, bridge, feed_lines=3, rows_per_chunk=2, cancelled=None):
     if raster.width != 384:
         raise ValueError("Printer raster must be 384 pixels wide")
     packed = packed_printer_bytes(raster)
@@ -33,6 +33,8 @@ def send_to_printer(raster, bridge, feed_lines=3, rows_per_chunk=2):
         raise RuntimeError("Printer rejected the new job")
     try:
         for offset in range(0, rows, rows_per_chunk):
+            if cancelled is not None and cancelled():
+                raise InterruptedError("Print cancelled")
             chunk = packed[offset * 48:min(offset + rows_per_chunk, rows) * 48]
             if bridge.call("print_rows", list(chunk)) is not True:
                 end = offset + len(chunk) // 48
@@ -40,7 +42,10 @@ def send_to_printer(raster, bridge, feed_lines=3, rows_per_chunk=2):
         if bridge.call("print_end", feed_lines) is not True:
             raise RuntimeError("Printer did not finish the job")
     except Exception:
-        bridge.call("print_cancel")
+        try:
+            bridge.call("print_cancel")
+        except Exception:
+            pass
         raise
 
 

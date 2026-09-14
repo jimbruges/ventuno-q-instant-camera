@@ -69,6 +69,7 @@ jobs = queue.Queue(maxsize=1)
 state_lock = threading.Lock()
 printer_lock = threading.Lock()
 wifi_cancel_event = threading.Event()
+process_cancel_event = threading.Event()
 state = {
     "status": "ready",
     "message": "Ready",
@@ -291,6 +292,37 @@ def publish(status, message, busy=None):
     ui.send_message("camera_state", snapshot_state())
 
 
+def check_cancelled():
+    if process_cancel_event.is_set():
+        raise InterruptedError("Process cancelled")
+
+
+def run_interruptibly(operation):
+    result_queue = queue.Queue(maxsize=1)
+
+    def execute():
+        try:
+            result_queue.put((True, operation()))
+        except BaseException as exc:
+            result_queue.put((False, exc))
+
+    threading.Thread(target=execute, daemon=True).start()
+    while True:
+        check_cancelled()
+        try:
+            succeeded, result = result_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        if succeeded:
+            return result
+        raise result
+
+
+def wait_interruptibly(seconds):
+    if process_cancel_event.wait(seconds):
+        check_cancelled()
+
+
 def resolve_camera_device():
     configured = str(config["camera"])
     candidates = []
@@ -339,9 +371,24 @@ def capture_frame(destination):
         ]
     else:
         raise RuntimeError("Camera capture requires ffmpeg or Docker")
+    process = None
     try:
-        subprocess.run(command, check=True, timeout=15)
+        process = subprocess.Popen(command)
+        deadline = time.monotonic() + 15
+        while process.poll() is None:
+            check_cancelled()
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(command, 15)
+            time.sleep(0.05)
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command)
+    except InterruptedError:
+        if process is not None and process.poll() is None:
+            process.terminate()
+        raise
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        if process is not None and process.poll() is None:
+            process.kill()
         raise RuntimeError(f"Camera capture failed: {exc}") from exc
 
 
@@ -412,10 +459,11 @@ def generate_npu(scene, output, profile, reference_path):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=900) as response:
-            if response.headers.get_content_type() != "image/png":
-                raise RuntimeError("NPU service returned an invalid response")
-            output.write_bytes(response.read())
+        content_type, body = run_interruptibly(lambda: _read_url(request, 900))
+        if content_type != "image/png":
+            raise RuntimeError("NPU service returned an invalid response")
+        check_cancelled()
+        output.write_bytes(body)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"NPU service failed ({exc.code}): {detail}") from exc
@@ -439,7 +487,30 @@ def generate_identity(scene, output):
         "--steps", "4", "--cfg-scale", "1.0", "--sampling-method", "euler",
         "--threads", "8", "--vae-tiling", "--output", str(output),
     ]
-    subprocess.run(command, check=True, timeout=600)
+    process = subprocess.Popen(command)
+    try:
+        deadline = time.monotonic() + 600
+        while process.poll() is None:
+            check_cancelled()
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(command, 600)
+            time.sleep(0.1)
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command)
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+        raise
+
+
+def _read_url(request, timeout):
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.headers.get_content_type(), response.read()
+
+
+def _read_json_url(request, timeout):
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
 
 
 def encode_data_url(path):
@@ -486,8 +557,7 @@ def generate_openrouter(scene, output, profile, reference_path):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            result = json.load(response)
+        result = run_interruptibly(lambda: _read_json_url(request, 180))
     except urllib.error.URLError as exc:
         raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
     message = result["choices"][0]["message"]
@@ -545,8 +615,14 @@ def create_print_raster(image_path, output_path):
 
 def print_raster(raster):
     with printer_lock:
+        check_cancelled()
         configure_printer()
-        send_to_printer(raster, Bridge, config["printer_feed_lines"])
+        send_to_printer(
+            raster,
+            Bridge,
+            config["printer_feed_lines"],
+            cancelled=process_cancel_event.is_set,
+        )
 
 
 def configure_printer():
@@ -614,6 +690,13 @@ def print_description(description):
     print_raster(description_raster(description))
 
 
+def describe_scene(scene):
+    chunks = []
+    for chunk in vlm.chat_stream(message=VLM_PROMPT, images=[str(scene)]):
+        chunks.append(chunk)
+    return "".join(chunks).strip()
+
+
 def try_print_wifi_ticket(title, ssid="", psk="", message=""):
     try:
         print_wifi_ticket(title, ssid, psk, message)
@@ -649,7 +732,7 @@ def process_capture(profile_id, profile, source="hardware"):
             raise RuntimeError(f"{profile_id.replace('_', ' ').upper()} is not currently available")
         set_active_profile(profile_id, mode)
         publish("countdown", f"Picture requested from {source}", True)
-        time.sleep(0.6)
+        wait_interruptibly(0.6)
         publish("capture", "Capturing scene", True)
         try:
             if Bridge.call("capture_light", True) is not True:
@@ -660,11 +743,13 @@ def process_capture(profile_id, profile, source="hardware"):
                 Bridge.call("capture_light", False)
             except Exception as exc:
                 logger.error(f"Capture light did not turn off cleanly: {exc}")
+            check_cancelled()
         prepare_scene(original, scene, profile)
         reference_path = profile_reference_path(profile_id)
         if mode == "describe":
             publish("generating", "Describing the scene with the local VLM", True)
-            description = vlm.chat(message=VLM_PROMPT, images=[str(scene)]).strip()
+            description = run_interruptibly(lambda: describe_scene(scene))
+            check_cancelled()
             if not description:
                 raise RuntimeError("The local VLM returned an empty description")
             scene.unlink(missing_ok=True)
@@ -672,7 +757,7 @@ def process_capture(profile_id, profile, source="hardware"):
                 publish("printing", "Printing the scene description", True)
                 print_description(description)
             publish("done", "Scene description printed", False)
-            time.sleep(1.5)
+            wait_interruptibly(1.5)
             publish("ready", "Ready", False)
             return
         if mode == "normal":
@@ -692,15 +777,27 @@ def process_capture(profile_id, profile, source="hardware"):
             publish("printing", "Printing your instant photo", True)
             print_raster(raster)
         publish("done", "Your instant photo is ready", False)
-        time.sleep(1.5)
+        wait_interruptibly(1.5)
+        publish("ready", "Ready", False)
+    except InterruptedError:
+        logger.info("Active process cancelled")
+        for path in (original, scene, generated, final, print_image):
+            path.unlink(missing_ok=True)
         publish("ready", "Ready", False)
     except Exception as exc:
-        logger.error(str(exc))
-        publish("error", str(exc), False)
-        time.sleep(2)
-        publish("ready", "Ready", False)
+        if process_cancel_event.is_set():
+            logger.info("Active process cancelled")
+            for path in (original, scene, generated, final, print_image):
+                path.unlink(missing_ok=True)
+            publish("ready", "Ready", False)
+        else:
+            logger.error(str(exc))
+            publish("error", str(exc), False)
+            time.sleep(2)
+            publish("ready", "Ready", False)
     finally:
         set_active_profile(None, None)
+        process_cancel_event.clear()
 
 
 def worker():
@@ -715,6 +812,7 @@ def request_capture(profile_id, source):
         if state["busy"] or profile_id not in PROFILE_IDS:
             return False
         try:
+            process_cancel_event.clear()
             profile = copy.deepcopy(config["button_profiles"][profile_id])
             jobs.put_nowait((profile_id, profile, source))
             state["busy"] = True
@@ -755,7 +853,10 @@ def wifi_setup_worker():
             "Connecting...",
         )
         publish("wifi_connect", "Connecting to the scanned Wi-Fi network", True)
-        connected_ssid = connect_wifi(credentials)
+        connected_ssid = connect_wifi(
+            credentials,
+            cancel_event=process_cancel_event,
+        )
         success_message = f"Wi-Fi connection successful: SSID={connected_ssid!r}"
         logger.info(success_message)
         try_print_wifi_ticket(
@@ -764,7 +865,9 @@ def wifi_setup_worker():
             message="Connection successful",
         )
         publish("wifi_success", "Wi-Fi connected", True)
-        time.sleep(3)
+        process_cancel_event.wait(3)
+    except InterruptedError:
+        logger.info("Wi-Fi setup cancelled")
     except Exception as exc:
         failure_message = f"Wi-Fi connection or setup failed: {exc}"
         logger.error(failure_message)
@@ -774,9 +877,10 @@ def wifi_setup_worker():
             message=str(exc),
         )
         publish("wifi_error", str(exc), True)
-        time.sleep(3)
+        process_cancel_event.wait(3)
     finally:
         wifi_cancel_event.clear()
+        process_cancel_event.clear()
         publish("ready", "Ready", False)
 
 
@@ -786,19 +890,32 @@ def on_wifi_setup():
             return
         state["busy"] = True
         wifi_cancel_event.clear()
+        process_cancel_event.clear()
     threading.Thread(target=wifi_setup_worker, daemon=True).start()
 
 
-def on_wifi_cancel():
+def on_cancel_process():
     with state_lock:
-        if state["status"] != "wifi_scan":
+        if not state["busy"]:
             return
+        state["message"] = "Cancelling"
+    process_cancel_event.set()
     wifi_cancel_event.set()
+    vlm.stop_stream()
+    ui.send_message("camera_state", snapshot_state())
+
+
+def on_wifi_cancel():
+    on_cancel_process()
 
 
 def on_ui_capture(_client, data):
     request_capture(str((data or {}).get("profile_id", "a_short")), "web control")
     ui.send_message("camera_state", snapshot_state())
+
+
+def on_ui_cancel(_client, _data):
+    on_cancel_process()
 
 
 def on_test_print(client, _data):
@@ -1062,7 +1179,9 @@ CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 Bridge.provide("take_photo", on_hardware_shutter)
 Bridge.provide("wifi_setup", on_wifi_setup)
 Bridge.provide("wifi_cancel", on_wifi_cancel)
+Bridge.provide("cancel_process", on_cancel_process)
 ui.on_message("take_photo", on_ui_capture)
+ui.on_message("cancel_process", on_ui_cancel)
 ui.on_message("test_print", on_test_print)
 ui.on_message("reprint", on_reprint)
 ui.on_message("get_state", on_get_state)

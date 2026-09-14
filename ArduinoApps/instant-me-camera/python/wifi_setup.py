@@ -140,15 +140,25 @@ def scan_wifi_qr(camera_device, deadline, cancel_event, log=None):
     return None
 
 
-def connect_wifi(credentials, socket_path=SOCKET_PATH, timeout=70):
+def connect_wifi(credentials, socket_path=SOCKET_PATH, timeout=70, cancel_event=None):
     request = json.dumps(credentials, ensure_ascii=False).encode("utf-8") + b"\n"
+    deadline = time.monotonic() + timeout
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
+        client.settimeout(min(1, timeout))
         client.connect(str(socket_path))
         client.sendall(request)
         response_data = b""
         while b"\n" not in response_data and len(response_data) < 16384:
-            chunk = client.recv(4096)
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Wi-Fi setup cancelled")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Wi-Fi helper timed out")
+            client.settimeout(min(0.5, remaining))
+            try:
+                chunk = client.recv(4096)
+            except socket.timeout:
+                continue
             if not chunk:
                 break
             response_data += chunk

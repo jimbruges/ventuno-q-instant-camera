@@ -74,8 +74,16 @@ void loop() {
     };
     for (int index = 0; index < 3; index++) {
       bool pressed = buttons.isPressed(index) == HIGH;
-      if (pressed && !previousPressed[index] && cameraState == WIFI_SCAN) {
-        Bridge.notify("wifi_cancel");
+      if (pressed && !previousPressed[index] && cameraState != READY) {
+        printJobActive = false;
+        printRowsExpected = 0;
+        printRowsReceived = 0;
+        captureFlashUntil = 0;
+        cameraState = READY;
+        activeMode = -1;
+        drawState();
+        updateControls();
+        Bridge.notify("cancel_process");
       } else if (pressed && !previousPressed[index] && cameraState == READY) {
         pressArmed[index] = true;
         pressStartedAt[index] = millis();

@@ -65,6 +65,7 @@ let buttonProfiles = {};
 let profileReferences = {};
 const selectedNpuModel = 'standard';
 let removeSavedOpenrouterKey = false;
+let isBusy = false;
 
 ui.on_connect(() => { connection.textContent = 'BOARD ONLINE'; connection.classList.add('online'); ui.send_message('get_state'); });
 ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; capture.disabled = true; profileButtons.forEach(button => { button.disabled = true; }); });
@@ -77,7 +78,9 @@ ui.on_message('settings_error', ({ message: error }) => {
   settingsStatus.className = 'error';
 });
 function requestSelectedCapture() {
-  if (settingsDirty) {
+  if (isBusy) {
+    ui.send_message('cancel_process');
+  } else if (settingsDirty) {
     captureAfterSettingsSave = true;
     settingsForm.requestSubmit();
   } else if (pendingSettings) {
@@ -182,12 +185,15 @@ bindReferenceControl(referenceInput, removeReference);
 bindReferenceControl(cloudReferenceInput, removeCloudReference);
 
 function render(state) {
+  isBusy = state.busy;
   statusText.textContent = state.status.toUpperCase();
   message.textContent = state.message;
   backend.textContent = state.active_gesture
     ? `${formatProfileName(state.active_gesture)} · ${state.active_mode.toUpperCase()}`
     : 'SIX PROFILES';
-  shutter.disabled = state.busy;
+  shutter.disabled = false;
+  shutter.title = state.busy ? 'Cancel active process' : 'Take photo';
+  shutter.setAttribute('aria-label', shutter.title);
   const availability = state.availability || {};
   currentAvailability = availability;
   if (state.settings) {
