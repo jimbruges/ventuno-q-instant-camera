@@ -25,7 +25,6 @@ const cloudReferenceInput = document.querySelector('#cloud-reference-input');
 const cloudReferencePreview = document.querySelector('#cloud-reference-preview');
 const cloudReferenceName = document.querySelector('#cloud-reference-name');
 const removeCloudReference = document.querySelector('#remove-cloud-reference');
-const npuModelInput = document.querySelector('#npu-model');
 const modelDescription = document.querySelector('#model-description');
 const resolutionInput = document.querySelector('#resolution');
 const stepsInput = document.querySelector('#steps');
@@ -63,9 +62,8 @@ let selectedProfileId = 'a_short';
 let selectedMode = 'normal';
 let currentAvailability = {};
 let buttonProfiles = {};
-let modelDefaults = {};
 let profileReferences = {};
-let selectedNpuModel = 'standard';
+const selectedNpuModel = 'standard';
 let removeSavedOpenrouterKey = false;
 
 ui.on_connect(() => { connection.textContent = 'BOARD ONLINE'; connection.classList.add('online'); ui.send_message('get_state'); });
@@ -136,13 +134,6 @@ removeOpenrouterKey.addEventListener('click', () => {
 openrouterApiKeyInput.addEventListener('input', () => {
   if (openrouterApiKeyInput.value) removeSavedOpenrouterKey = false;
 });
-npuModelInput.addEventListener('change', () => {
-  selectedNpuModel = npuModelInput.value;
-  loadLocalProfile(modelDefaults[selectedNpuModel]);
-  settingsDirty = true;
-  settingsStatus.textContent = 'UNSAVED';
-  settingsStatus.className = '';
-});
 profileModeInput.addEventListener('change', () => {
   selectedMode = profileModeInput.value;
   showModePanel(selectedMode);
@@ -200,7 +191,6 @@ function render(state) {
   const availability = state.availability || {};
   currentAvailability = availability;
   if (state.settings) {
-    modelDefaults = structuredClone(state.settings.npu_model_defaults || {});
     if (!settingsDirty) buttonProfiles = structuredClone(state.settings.button_profiles || {});
   }
   profileReferences = state.profile_references || {};
@@ -314,10 +304,8 @@ function loadSelectedProfile() {
   const profile = buttonProfiles[selectedProfileId];
   if (!profile) return;
   selectedMode = profile.mode;
-  selectedNpuModel = profile.npu_model;
   settingsTitle.textContent = formatProfileName(selectedProfileId);
   profileModeInput.value = selectedMode;
-  npuModelInput.value = selectedNpuModel;
   loadLocalProfile(profile);
   cloudPromptInput.value = profile.cloud_prompt;
   openrouterModelInput.value = profile.openrouter_model;
@@ -379,9 +367,7 @@ function loadLocalProfile(profile) {
   imageGuidanceInput.value = profile.image_guidance_scale;
   randomSeedInput.checked = profile.seed === null;
   if (profile.seed !== null) seedInput.value = profile.seed;
-  modelDescription.textContent = selectedNpuModel === 'hyper'
-    ? 'DISTILLED 4-STEP EDITOR · FIRST SWITCH LOADS MODEL'
-    : 'FULL 20-STEP EDITOR · BEST COMPOSITION';
+  modelDescription.textContent = 'FULL 20-STEP EDITOR · BEST COMPOSITION';
   updateSeedControl();
   updateSettingOutputs();
 }

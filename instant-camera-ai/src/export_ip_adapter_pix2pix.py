@@ -57,7 +57,7 @@ class AdapterEditorUnet(torch.nn.Module):
         )[0].float()
 
 
-def load_pipeline(hyper_lora=None):
+def load_pipeline():
     pipe = StableDiffusionInstructPix2PixPipeline(
         vae=AutoencoderKL.from_pretrained(
             MODEL_DIR, subfolder="vae", variant="fp16", torch_dtype=torch.float16
@@ -88,14 +88,6 @@ def load_pipeline(hyper_lora=None):
         low_cpu_mem_usage=True,
     )
     pipe.set_ip_adapter_scale(0.8)
-    if hyper_lora:
-        hyper_lora = Path(hyper_lora)
-        pipe.load_lora_weights(
-            hyper_lora.parent,
-            weight_name=hyper_lora.name,
-            adapter_name="hyper",
-        )
-        pipe.fuse_lora(adapter_names=["hyper"])
     return pipe
 
 
@@ -142,8 +134,8 @@ def prepare_reference():
     )
 
 
-def prepare_unet(batch_size=1, build_dir=BUILD_DIR, resolution=512, hyper_lora=None):
-    pipe = load_pipeline(hyper_lora)
+def prepare_unet(batch_size=1, build_dir=BUILD_DIR, resolution=512):
+    pipe = load_pipeline()
     latent_size = resolution // 8
     export_model(
         AdapterEditorUnet(pipe.unet),
@@ -194,13 +186,12 @@ def prepare_vae(build_dir, resolution):
     )
 
 
-def prepare_variant(build_dir, resolution, hyper_lora=None, include_vae=True):
+def prepare_variant(build_dir, resolution, include_vae=True):
     if resolution <= 0 or resolution % 8:
         raise ValueError("resolution must be a positive multiple of 8")
     prepare_unet(
         build_dir=build_dir,
         resolution=resolution,
-        hyper_lora=hyper_lora,
     )
     if include_vae:
         prepare_vae(build_dir, resolution)
@@ -208,9 +199,8 @@ def prepare_variant(build_dir, resolution, hyper_lora=None, include_vae=True):
         json.dumps(
             {
                 "resolution": resolution,
-                "scheduler": "ddim_trailing" if hyper_lora else "euler_ancestral",
-                "recommended_steps": 4 if hyper_lora else 20,
-                "hyper_lora": Path(hyper_lora).name if hyper_lora else None,
+                "scheduler": "euler_ancestral",
+                "recommended_steps": 20,
             },
             indent=2,
         )
@@ -270,7 +260,6 @@ def main():
     )
     parser.add_argument("--build-dir", type=Path)
     parser.add_argument("--resolution", type=int, default=512)
-    parser.add_argument("--hyper-lora", type=Path)
     parser.add_argument("--skip-vae", action="store_true")
     args = parser.parse_args()
     if args.command == "prepare":
@@ -293,7 +282,6 @@ def main():
         prepare_variant(
             args.build_dir,
             args.resolution,
-            args.hyper_lora,
             include_vae=not args.skip_vae,
         )
     elif args.command == "submit-variant":

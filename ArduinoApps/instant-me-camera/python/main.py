@@ -52,15 +52,7 @@ NPU_MODEL_DEFAULTS = {
         "guidance_scale": 7.5,
         "image_guidance_scale": 1.5,
         "seed": None,
-    },
-    "hyper": {
-        "prompt": "a photorealistic person holding the reference object naturally",
-        "resolution": 384,
-        "steps": 4,
-        "guidance_scale": 1.0,
-        "image_guidance_scale": 1.0,
-        "seed": None,
-    },
+    }
 }
 
 logger = Logger("InstantMeCamera")
@@ -105,12 +97,10 @@ def load_config():
         "npu_guidance_scale": float(os.getenv("NPU_GUIDANCE_SCALE", "7.5")),
         "npu_image_guidance_scale": float(os.getenv("NPU_IMAGE_GUIDANCE_SCALE", "1.5")),
         "npu_seed": None,
-        "npu_model": os.getenv("NPU_MODEL", "standard"),
+        "npu_model": "standard",
         "cloud_prompt": os.getenv("CLOUD_PROMPT", DEFAULT_CLOUD_PROMPT),
         "identity_prompt": os.getenv("IDENTITY_PROMPT", "candid instant camera photograph, a man img naturally joining the people in the scene"),
         "sd_cli": os.getenv("SD_CLI", str(Path.home() / "instant-camera-ai" / "bin" / "sd-cli")),
-        "sd_model": os.getenv("SD_MODEL", str(Path.home() / "instant-camera-ai" / "models" / "realistic-vision-v5.1.safetensors")),
-        "sd_lora": os.getenv("SD_LORA", str(Path.home() / "instant-camera-ai" / "models" / "hyper-sd15-4step.safetensors")),
         "photo_maker": os.getenv("PHOTO_MAKER_MODEL", str(Path.home() / "instant-camera-ai" / "models" / "photomaker-v1.safetensors")),
         "identity_model": os.getenv("IDENTITY_MODEL", str(Path.home() / "instant-camera-ai" / "models" / "sdxl-lightning.safetensors")),
         "generation_width": int(os.getenv("GENERATION_WIDTH", "384")),
@@ -151,8 +141,7 @@ def load_config():
             "seed": config["npu_seed"],
         })
     config["npu_profiles"] = profiles
-    if config["npu_model"] not in profiles:
-        config["npu_model"] = "standard"
+    config["npu_model"] = "standard"
     default_local = profiles[config["npu_model"]]
     button_profiles = {}
     saved_button_profiles = config.get("button_profiles", {})
@@ -174,8 +163,7 @@ def load_config():
             profile.update(saved_profile)
         if profile["mode"] not in MODE_NAMES:
             profile["mode"] = DEFAULT_PROFILE_MODES[profile_id]
-        if profile["npu_model"] not in NPU_MODEL_DEFAULTS:
-            profile["npu_model"] = "standard"
+        profile["npu_model"] = "standard"
         button_profiles[profile_id] = profile
     config["button_profiles"] = button_profiles
     return config
@@ -260,7 +248,6 @@ def snapshot_state():
         }
         result["settings"] = {
             "button_profiles": copy.deepcopy(config["button_profiles"]),
-            "npu_model_defaults": copy.deepcopy(NPU_MODEL_DEFAULTS),
             "camera_brightness": config["camera_brightness"],
             "camera_contrast": config["camera_contrast"],
             "printer_enabled": config["printer_enabled"],
@@ -277,9 +264,7 @@ def snapshot_state():
         result["openrouter_key_ready"] = bool(saved_key or os.getenv("OPENROUTER_API_KEY"))
         result["openrouter_key_source"] = "saved" if saved_key else "environment" if os.getenv("OPENROUTER_API_KEY") else None
         required = []
-        if config["backend"] == "local":
-            required.extend([config["sd_cli"], config["sd_model"], config["sd_lora"]])
-        elif config["backend"] == "identity":
+        if config["backend"] == "identity":
             required.extend([config["sd_cli"], config["identity_model"], config["photo_maker"]])
         result["local_ready"] = all(Path(path).is_file() for path in required)
         return result
@@ -394,34 +379,6 @@ def prepare_scene(source, destination, profile):
         prepared.resize(
             (generation_width, generation_height), Image.Resampling.LANCZOS
         ).save(destination, quality=92)
-
-
-def generate_local(scene, output):
-    lora_path = Path(config["sd_lora"])
-    prompt = f"{config['prompt']} <lora:{lora_path.stem}:1>"
-    mask_path = output.with_suffix(".mask.png")
-    with Image.open(scene) as scene_image:
-        generation_size = scene_image.size
-    mask = Image.new("L", generation_size, 0)
-    width, height = mask.size
-    ImageDraw.Draw(mask).ellipse((width * 0.07, height * 0.35, width * 0.60, height * 1.10), fill=255)
-    mask.filter(ImageFilter.GaussianBlur(max(3, width // 64))).save(mask_path)
-    try:
-        command = [
-            config["sd_cli"], "-m", config["sd_model"],
-            "--lora-model-dir", str(lora_path.parent),
-            "--init-img", str(scene), "--mask", str(mask_path),
-            "--strength", str(config["generation_strength"]),
-            "--prompt", prompt,
-            "--negative-prompt", "person, human, text, watermark, deformed, illustration",
-            "--width", str(width), "--height", str(height),
-            "--steps", str(config["generation_steps"]), "--cfg-scale", "1.0",
-            "--sampling-method", "ddim_trailing", "--scheduler", "discrete",
-            "--threads", "8", "--vae-tiling", "--output", str(output),
-        ]
-        subprocess.run(command, check=True, timeout=300)
-    finally:
-        mask_path.unlink(missing_ok=True)
 
 
 def generate_npu(scene, output, profile, reference_path):
@@ -867,8 +824,8 @@ def on_set_settings(client, data):
             raise ValueError("Unknown button gesture")
         if mode not in MODE_NAMES:
             raise ValueError("Mode must be Normal, Local, or Cloud")
-        if npu_model not in NPU_MODEL_DEFAULTS:
-            raise ValueError("Local model must be standard or hyper")
+        if npu_model != "standard":
+            raise ValueError("Local model must be standard")
         if not prompt or len(prompt) > 500:
             raise ValueError("Prompt must contain 1 to 500 characters")
         if not cloud_prompt or len(cloud_prompt) > 800:

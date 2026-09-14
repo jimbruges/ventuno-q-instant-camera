@@ -16,14 +16,6 @@
       "guidance_scale": 7.5,
       "image_guidance_scale": 1.5,
       "seed": null
-    },
-    "hyper": {
-      "prompt": "a photorealistic person holding the reference object naturally",
-      "resolution": 384,
-      "steps": 4,
-      "guidance_scale": 1.0,
-      "image_guidance_scale": 1.0,
-      "seed": null
     }
   },
   "button_profiles": {

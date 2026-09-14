@@ -5,7 +5,7 @@ An App Lab instant camera and thermal-printing photobooth for VENTUNO Q. It can 
 ## Headless controls
 
 - Buttons A, B, and C each have independently configurable short-press and long-press profiles.
-- Every profile can run Normal, Local, or Cloud mode with its own model, instruction, generation parameters, and reference image.
+- Every profile can run Normal, Local, or Cloud mode with its own instruction, generation parameters, and reference image.
 - A press held for at least 900 ms selects the long-press profile; a shorter press selects the short-press profile.
 
 A button LED is steady when either of its profiles is available. Cloud profiles require their own reference image, an OpenRouter API key, and internet access. Local profiles require their selected NPU model to be ready. The selected button flashes while a job runs. The LED matrix shows ready, capture, processing/printing, success, and error states; Modulino Pixels provide the shutter flash.
@@ -29,7 +29,7 @@ The scan timeout defaults to 120 seconds and can be overridden with `WIFI_SCAN_T
 
 ## Startup
 
-`Instant Me Photobooth` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. Local mode becomes available after model initialization, while Normal mode requires only the USB webcam. Hyper mode additionally requires its configured removable model directory to be mounted. Cloud mode requires the webcam, reference portrait, network, and `OPENROUTER_API_KEY`.
+`Instant Me Photobooth` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. Local mode becomes available after model initialization, while Normal mode requires only the USB webcam. Cloud mode requires the webcam, reference portrait, network, and `OPENROUTER_API_KEY`.
 
 ## Thermal printer wiring
 
@@ -57,7 +57,6 @@ The build and mocked transport tests do not energize the printer. A real test pr
 ## Backends
 
 - `npu`: the default, using FP16 InstructPix2Pix and IP-Adapter Plus on the VENTUNO Q HTP/NPU. It accepts a captured image, an optional reference image, and a flexible instruction, with no user-supplied mask or manual compositing.
-- `local`: CPU fallback using Realistic Vision 5.1 (SD 1.5) and the four-step Hyper-SD adapter for img2img.
 - `identity`: the slower original mode, using SDXL, PhotoMaker v1, and `assets/reference/me.jpg`.
 - `openrouter`: OpenRouter's image editing API. Set its API key in Cloud settings in the Web UI, or provide `OPENROUTER_API_KEY` through App Lab Brick Configuration.
 - `preview`: deterministic local composite for testing capture, hardware, and UI without model weights.
@@ -79,12 +78,11 @@ The local model files are intentionally outside the App directory under `~/insta
 - `~/instant-camera-ai/models/qcs8275-ip-adapter-plus`: custom FP16 QNN CLIP Vision reference encoder and IP-Adapter-aware editor U-Net contexts.
 - `~/instant-camera-ai/bin/sd-cli`: ARM64 CPU build of `stable-diffusion.cpp`.
 - `~/instant-camera-ai/models/realistic-vision-v5.1.safetensors`: compact SD 1.5 base model.
-- `~/instant-camera-ai/models/hyper-sd15-4step.safetensors`: four-step Hyper-SD adapter.
 - `~/instant-camera-ai/models/sdxl-lightning.safetensors`: DreamShaper XL Lightning.
 - `~/instant-camera-ai/models/photomaker-v1.safetensors`: PhotoMaker v1 identity adapter.
 - `tools/ffmpeg`: bundled static ARM64 webcam capture binary.
 
-The NPU editor uses 20 Euler ancestral steps with separate text and image guidance. A verified 512x512 edit completed in 25.2 seconds. Warm component timings were 310 ms for source encoding and about 400 ms for each editor U-Net pass; each step performs three U-Net passes. The CPU local profile remains available and took about 1 minute 50 seconds with a 2.5 GiB peak. The identity profile took about six minutes with an 8.1 GiB peak.
+The NPU editor uses 20 Euler ancestral steps with separate text and image guidance. A verified 512x512 edit completed in 25.2 seconds. Warm component timings were 310 ms for source encoding and about 400 ms for each editor U-Net pass; each step performs three U-Net passes. The identity profile took about six minutes with an 8.1 GiB peak.
 
 GenieX is not used because its public runtime supports LLM and VLM inference rather than Stable Diffusion graphs. This backend uses Qualcomm's dedicated QNN Stable Diffusion export and `/dev/fastrpc-cdsp` directly through ONNX Runtime QNN.
 

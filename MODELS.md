@@ -101,7 +101,7 @@ python instant-camera-ai/src/export_ip_adapter_pix2pix.py prepare
 
 Compilation jobs target the `Arduino VENTUNO Q` device through Qualcomm AI Hub. Downloaded job outputs must be arranged in the installed layout above. Export environments and source checkpoints are intentionally excluded from Git because they are large build inputs, not board runtime dependencies.
 
-Optional CPU, identity, ControlNet, batched, and Hyper-SD experiments are not part of the default bundle. Their paths remain configurable, but they are not required for Normal, Cloud, or the supported Standard NPU mode.
+Optional CPU, identity, ControlNet, and batched experiments are not part of the default bundle. They are not required for Normal, Cloud, or the supported Standard NPU mode.
 
 Maintainers can assemble a replacement release directly from a prepared VENTUNO Q
 without retaining duplicate archives:

@@ -10,9 +10,4 @@ arguments=(
   --worker-port 7101
 )
 
-hyper="${INSTANT_CAMERA_HYPER_MODEL_DIR:-}"
-if [[ -n "$hyper" && -d "$hyper" ]]; then
-  arguments=(--variant "hyper=$hyper" "${arguments[@]}")
-fi
-
 exec /usr/bin/python3 "$project/src/npu_router.py" "${arguments[@]}"
