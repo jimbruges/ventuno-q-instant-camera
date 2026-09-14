@@ -1,6 +1,13 @@
 # Keep this repository focused on the camera App and custom pipeline source.
 /*
 !/.gitignore
+!/README.md
+!/MODELS.md
+!/install.sh
+!/huggingface/
+!/huggingface/**
+!/scripts/
+!/scripts/**
 
 !/ArduinoApps/
 /ArduinoApps/*
@@ -15,6 +22,11 @@
 
 !/instant-camera-ai/
 /instant-camera-ai/*
+!/instant-camera-ai/bin/
+/instant-camera-ai/bin/*
+!/instant-camera-ai/bin/start-npu-router
+!/instant-camera-ai/systemd/
+!/instant-camera-ai/systemd/**
 !/instant-camera-ai/src/
 /instant-camera-ai/src/*
 !/instant-camera-ai/src/*.py

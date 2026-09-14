@@ -12,14 +12,17 @@ from PIL import Image
 from transformers import CLIPTokenizer
 
 
+PROJECT_DIR = Path(
+    os.getenv("INSTANT_CAMERA_AI_HOME", Path.home() / "instant-camera-ai")
+)
 DEFAULT_MODEL_DIR = (
-    Path.home()
-    / "instant-camera-ai"
+    PROJECT_DIR
     / "models"
     / "qcs8275-sd15"
     / "stable_diffusion_v1_5-precompiled_qnn_onnx-w8a16-qualcomm_qcs8275"
 )
 TOKENIZER_REPO = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+LOCAL_TOKENIZER_DIR = PROJECT_DIR / "models" / "tokenizer"
 
 
 @dataclass
@@ -93,9 +96,12 @@ class StableDiffusionQnn:
         started = time.perf_counter()
         for component in components:
             setattr(self, component, self._load(component))
-        self.tokenizer = CLIPTokenizer.from_pretrained(
-            TOKENIZER_REPO, subfolder="tokenizer"
-        )
+        if not LOCAL_TOKENIZER_DIR.is_dir():
+            raise FileNotFoundError(
+                f"Local tokenizer is missing at {LOCAL_TOKENIZER_DIR}; "
+                "run scripts/install-models.sh from the source repository"
+            )
+        self.tokenizer = CLIPTokenizer.from_pretrained(LOCAL_TOKENIZER_DIR)
         print(f"Models ready in {time.perf_counter() - started:.2f}s", flush=True)
 
     def _load(self, name):

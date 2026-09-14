@@ -1,0 +1,20 @@
+[Unit]
+Description=Instant Me Camera NPU model router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/instant-camera-ai
+Environment=HOME=%h
+Environment=PYTHONPATH=%h/instant-camera-ai/qnn-runtime
+Environment=LD_LIBRARY_PATH=/vendor/lib64
+Environment=HF_HUB_OFFLINE=1
+ExecStart=%h/instant-camera-ai/bin/start-npu-router
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,28 @@
+VENTUNO Q Instant Camera model bundle provenance
+
+Target device: Arduino VENTUNO Q
+Qualcomm AI Hub compile target: Arduino VENTUNO Q
+Context target naming: QCS8275 / HTP v75
+
+Upstream model components:
+- stable-diffusion-v1-5/stable-diffusion-v1-5
+  Revision: 451f4fe16113bff5a5d2269ed5ad43b0592e9a14
+  License: CreativeML OpenRAIL-M
+  Components: text encoder, VAE decoder, tokenizer
+- timbrooks/instruct-pix2pix
+  Revision: 31519b5cb02a7fd89b906d88731cd4d6a7bbf88d
+  License: MIT with inherited Stable Diffusion model restrictions
+  Component: VAE encoder
+- h94/IP-Adapter
+  Revision: 018e402774aeeddd60609b4ecdb7e298259dc729
+  License: Apache-2.0
+  Components: IP-Adapter Plus reference encoder and editor U-Net
+
+The QNN context binaries are modified, compiled forms of these model components.
+Stable Diffusion and derivatives remain subject to CreativeML OpenRAIL-M,
+including its use restrictions. Exact upstream license texts accompany this file.
+
+Runtime:
+- ONNX Runtime QNN and its bundled dependencies retain their included licenses.
+- The runtime is built for 64-bit ARM Linux and uses the board's /vendor/lib64
+  Qualcomm libraries at execution time.
