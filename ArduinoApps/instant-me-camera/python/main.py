@@ -16,7 +16,8 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
+from arduino.app_bricks.vlm import VisionLanguageModel
 from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App, Bridge, Logger
 from receipt_effects import receipt_raster, send_to_printer
@@ -34,15 +35,16 @@ SECRETS_PATH = APP_DIR / ".secrets.json"
 DEFAULT_PROMPT = "same room, candid realistic instant camera photograph, one large yellow rubber duck centered on the floor in the masked area"
 DEFAULT_NPU_PROMPT = "Please replace the just the head of any human in this image with a large rubber duck. Preserve every person, their clothes, the room, lighting, and camera angle."
 DEFAULT_CLOUD_PROMPT = "Place the person from the second reference image naturally into the scene in the first image. Keep their face, body, clothes, and identity recognizable. If people are present, pose them together; otherwise place the person naturally in the background. Preserve the scene, lighting, camera angle, and realistic photographic style."
+VLM_PROMPT = "/no_think Describe this image in two concise sentences for a printed receipt. Mention the main people, objects, setting, and action. Do not use markdown."
 OUTPUT_WIDTH = 200
-MODE_NAMES = {"normal": 0, "cloud": 1, "local": 2}
+MODE_NAMES = {"normal": 0, "cloud": 1, "local": 2, "describe": 3}
 PROFILE_IDS = (
     "a_short", "b_short", "c_short",
     "a_long", "b_long", "c_long",
 )
 DEFAULT_PROFILE_MODES = {
     "a_short": "normal", "b_short": "cloud", "c_short": "local",
-    "a_long": "normal", "b_long": "cloud", "c_long": "local",
+    "a_long": "describe", "b_long": "cloud", "c_long": "local",
 }
 NPU_MODEL_DEFAULTS = {
     "standard": {
@@ -57,6 +59,12 @@ NPU_MODEL_DEFAULTS = {
 
 logger = Logger("InstantMeCamera")
 ui = WebUI()
+vlm = VisionLanguageModel(
+    system_prompt="You are a concise visual narrator. Report only details visible in the image.",
+    temperature=0.3,
+    max_tokens=256,
+    timeout=600,
+)
 jobs = queue.Queue(maxsize=1)
 state_lock = threading.Lock()
 printer_lock = threading.Lock()
@@ -559,6 +567,35 @@ def printable_ticket_text(value, limit):
     return text.encode("ascii", errors="replace").decode("ascii")[:limit]
 
 
+def description_raster(description):
+    width = 384
+    margin = 16
+    body_font = ImageFont.load_default(size=22)
+    title_font = ImageFont.load_default(size=26)
+    measure = ImageDraw.Draw(Image.new("1", (1, 1), 1))
+    lines = []
+    current = ""
+    for word in printable_ticket_text(description, 600).split():
+        candidate = f"{current} {word}".strip()
+        if current and measure.textlength(candidate, font=body_font) > width - 2 * margin:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    line_height = 28
+    image = Image.new("1", (width, 72 + line_height * len(lines)), 1)
+    draw = ImageDraw.Draw(image)
+    title = "INSTANT ME SEES"
+    title_width = draw.textlength(title, font=title_font)
+    draw.text(((width - title_width) / 2, 10), title, font=title_font, fill=0)
+    draw.line((margin, 48, width - margin, 48), fill=0, width=2)
+    for index, line in enumerate(lines):
+        draw.text((margin, 60 + index * line_height), line, font=body_font, fill=0)
+    return image
+
+
 def print_wifi_ticket(title, ssid="", psk="", message=""):
     with printer_lock:
         configure_printer()
@@ -571,6 +608,10 @@ def print_wifi_ticket(title, ssid="", psk="", message=""):
         )
         if accepted is not True:
             raise RuntimeError("Printer rejected the Wi-Fi ticket")
+
+
+def print_description(description):
+    print_raster(description_raster(description))
 
 
 def try_print_wifi_ticket(title, ssid="", psk="", message=""):
@@ -621,6 +662,19 @@ def process_capture(profile_id, profile, source="hardware"):
                 logger.error(f"Capture light did not turn off cleanly: {exc}")
         prepare_scene(original, scene, profile)
         reference_path = profile_reference_path(profile_id)
+        if mode == "describe":
+            publish("generating", "Describing the scene with the local VLM", True)
+            description = vlm.chat(message=VLM_PROMPT, images=[str(scene)]).strip()
+            if not description:
+                raise RuntimeError("The local VLM returned an empty description")
+            scene.unlink(missing_ok=True)
+            if config["printer_enabled"]:
+                publish("printing", "Printing the scene description", True)
+                print_description(description)
+            publish("done", "Scene description printed", False)
+            time.sleep(1.5)
+            publish("ready", "Ready", False)
+            return
         if mode == "normal":
             publish("generating", "Preparing the normal photo", True)
             shutil.copyfile(scene, generated)
@@ -823,7 +877,7 @@ def on_set_settings(client, data):
         if profile_id not in PROFILE_IDS:
             raise ValueError("Unknown button gesture")
         if mode not in MODE_NAMES:
-            raise ValueError("Mode must be Normal, Local, or Cloud")
+            raise ValueError("Mode must be Normal, Local, Cloud, or Describe")
         if npu_model != "standard":
             raise ValueError("Local model must be standard")
         if not prompt or len(prompt) > 500:
@@ -973,6 +1027,8 @@ def refresh_availability():
     availability = {}
     for profile_id, profile in config["button_profiles"].items():
         if profile["mode"] == "normal":
+            availability[profile_id] = camera_ready
+        elif profile["mode"] == "describe":
             availability[profile_id] = camera_ready
         elif profile["mode"] == "cloud":
             availability[profile_id] = camera_ready and cloud_ready and profile_reference_path(profile_id).is_file()

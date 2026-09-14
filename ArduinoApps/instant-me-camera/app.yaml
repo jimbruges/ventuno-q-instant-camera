@@ -1,5 +1,6 @@
 name: Instant Me Photobooth
 icon: 📷
-description: Capture, transform, archive, and thermally print photos in three headless modes.
+description: Capture, transform, describe, and thermally print webcam scenes.
 bricks:
+  - arduino:vlm
   - arduino:web_ui

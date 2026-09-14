@@ -33,7 +33,7 @@
     },
     "b_short": { "mode": "cloud" },
     "c_short": { "mode": "local" },
-    "a_long": { "mode": "normal" },
+    "a_long": { "mode": "describe" },
     "b_long": { "mode": "cloud" },
     "c_long": { "mode": "local" }
   },

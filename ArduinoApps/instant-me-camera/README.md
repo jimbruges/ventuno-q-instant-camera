@@ -5,8 +5,10 @@ An App Lab instant camera and thermal-printing photobooth for VENTUNO Q. It can 
 ## Headless controls
 
 - Buttons A, B, and C each have independently configurable short-press and long-press profiles.
-- Every profile can run Normal, Local, or Cloud mode with its own instruction, generation parameters, and reference image.
+- Every profile can run Normal, Local, Cloud, or Describe mode. Describe sends the captured webcam scene to the built-in local VLM and prints its text description instead of an image.
 - A press held for at least 900 ms selects the long-press profile; a shorter press selects the short-press profile.
+
+Button A long press uses Describe by default. It runs locally through the `arduino:vlm` Brick and its configured `genie:qwen3_vl_4b_instruct` model; it does not require a cloud API key.
 
 A button LED is steady when either of its profiles is available. Cloud profiles require their own reference image, an OpenRouter API key, and internet access. Local profiles require their selected NPU model to be ready. The selected button flashes while a job runs. The LED matrix shows ready, capture, processing/printing, success, and error states; Modulino Pixels provide the shutter flash.
 
@@ -29,7 +31,7 @@ The scan timeout defaults to 120 seconds and can be overridden with `WIFI_SCAN_T
 
 ## Startup
 
-`Instant Me Photobooth` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. Local mode becomes available after model initialization, while Normal mode requires only the USB webcam. Cloud mode requires the webcam, reference portrait, network, and `OPENROUTER_API_KEY`.
+`Instant Me Photobooth` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. Local mode becomes available after model initialization, while Normal mode requires only the USB webcam. Describe mode uses the VLM configured for the App in App Lab. Cloud mode requires the webcam, reference portrait, network, and `OPENROUTER_API_KEY`.
 
 ## Thermal printer wiring
 
@@ -63,7 +65,7 @@ The build and mocked transport tests do not energize the printer. A real test pr
 
 Copy `config.example.json` to `config.json` to override defaults. `config.json` is optional. Settings include the NPU and cloud prompts, OpenRouter model, camera brightness/contrast, print enable, raster threshold, paper feed, heat dots/time/interval, density, and break time. A key entered in the Web UI is stored separately in ignored `.secrets.json` with owner-only permissions and is never returned to the browser; a blank key field preserves it.
 
-The web interface exposes all three test captures, the NPU instruction and optional `object.jpg` reference, the cloud composition prompt and model, camera processing, printer controls, a diagnostic print, and reprints from recent history. Applied values take effect on the next exposure and are persisted to `config.json` for future app and board restarts. Source resolution controls preprocessing detail; the compiled editor graph always executes at 512x512.
+The web interface exposes all four capture modes, the NPU instruction and optional `object.jpg` reference, the cloud composition prompt and model, camera processing, printer controls, a diagnostic print, and reprints from recent history. Applied values take effect on the next exposure and are persisted to `config.json` for future app and board restarts. Source resolution controls preprocessing detail; the compiled editor graph always executes at 512x512.
 
 The local model files are intentionally outside the App directory under `~/instant-camera-ai` so App Lab does not package several gigabytes of weights.
 
