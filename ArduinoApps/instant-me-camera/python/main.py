@@ -647,7 +647,6 @@ def description_raster(description):
     width = 384
     margin = 16
     body_font = ImageFont.load_default(size=22)
-    title_font = ImageFont.load_default(size=26)
     measure = ImageDraw.Draw(Image.new("1", (1, 1), 1))
     lines = []
     current = ""
@@ -661,14 +660,10 @@ def description_raster(description):
     if current:
         lines.append(current)
     line_height = 28
-    image = Image.new("1", (width, 72 + line_height * len(lines)), 1)
+    image = Image.new("1", (width, 16 + line_height * len(lines)), 1)
     draw = ImageDraw.Draw(image)
-    title = "INSTANT ME SEES"
-    title_width = draw.textlength(title, font=title_font)
-    draw.text(((width - title_width) / 2, 10), title, font=title_font, fill=0)
-    draw.line((margin, 48, width - margin, 48), fill=0, width=2)
     for index, line in enumerate(lines):
-        draw.text((margin, 60 + index * line_height), line, font=body_font, fill=0)
+        draw.text((margin, 8 + index * line_height), line, font=body_font, fill=0)
     return image
 
 

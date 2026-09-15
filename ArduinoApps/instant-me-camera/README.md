@@ -1,4 +1,4 @@
-# Instant Me Photobooth
+# VENTUNO Q AI Camera
 
 An App Lab instant camera and thermal-printing photobooth for VENTUNO Q. It can run headless from Modulino Buttons while the Web UI provides configuration, test captures, test prints, and recent-print history.
 
@@ -32,7 +32,7 @@ The scan timeout defaults to 120 seconds and can be overridden with `WIFI_SCAN_T
 
 ## Startup
 
-`Instant Me Photobooth` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. Local mode becomes available after model initialization, while Normal mode requires only the USB webcam. Describe mode uses the VLM configured for the App in App Lab. Cloud mode requires the webcam, reference portrait, network, and `OPENROUTER_API_KEY`.
+`VENTUNO Q AI Camera` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. Local mode becomes available after model initialization, while Normal mode requires only the USB webcam. Describe mode uses the VLM configured for the App in App Lab. Cloud mode requires the webcam, reference portrait, network, and `OPENROUTER_API_KEY`.
 
 ## Thermal printer wiring
 

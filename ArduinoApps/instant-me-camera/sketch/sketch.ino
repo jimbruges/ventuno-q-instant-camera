@@ -233,7 +233,7 @@ bool testPrint() {
   updateControls();
   printer.justify('C');
   printer.boldOn();
-  printer.println("INSTANT ME");
+  printer.println("VENTUNO Q AI CAMERA");
   printer.boldOff();
   printer.println("Printer test OK");
   printer.feed(3);
