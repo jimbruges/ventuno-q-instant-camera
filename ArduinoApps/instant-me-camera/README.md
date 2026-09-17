@@ -32,7 +32,7 @@ The scan timeout defaults to 120 seconds and can be overridden with `WIFI_SCAN_T
 
 ## Startup
 
-`VENTUNO Q AI Camera` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. Local mode becomes available after model initialization, while Normal mode requires only the USB webcam. Describe mode uses the VLM configured for the App in App Lab. Cloud mode requires the webcam, reference portrait, network, and `OPENROUTER_API_KEY`.
+`VENTUNO Q AI Camera` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. The Web UI uses the owner-only `.model-service.sock` host helper to stop this service and start it again later. Local and Describe modes are unavailable while it is stopped; Normal and Cloud remain usable. The VLM's Genie service is managed by the App runtime and has no independent unload API.
 
 ## Thermal printer wiring
 

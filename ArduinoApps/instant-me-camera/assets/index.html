@@ -144,6 +144,14 @@
             <label>BREAK TIME<input id="printer-break-time" name="printer_break_time" type="number" min="0" max="7" value="2"></label>
           </div>
         </fieldset>
+        <fieldset class="common-panel model-service-panel">
+          <legend>LOCAL MODEL SERVICE</legend>
+          <div class="service-control">
+            <div><small>IMAGE MODEL</small><strong id="model-service-status">CHECKING</strong></div>
+            <button id="model-service-toggle" class="secondary-action" type="button" disabled>START MODEL SERVICE</button>
+          </div>
+          <span id="model-service-message" class="service-message" aria-live="polite"></span>
+        </fieldset>
         <div class="settings-actions">
           <button id="capture" type="button">CAPTURE</button>
           <button id="apply-settings" type="submit">APPLY SETTINGS</button>

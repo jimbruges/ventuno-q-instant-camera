@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from arduino.app_bricks.vlm import VisionLanguageModel
 from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App, Bridge, Logger
+from model_service import request_model_service
 from receipt_effects import receipt_raster, send_to_printer
 from wifi_setup import connect_wifi, scan_wifi_qr
 
@@ -78,6 +79,7 @@ state = {
     "busy": False,
     "active_mode": None,
     "active_gesture": None,
+    "model_service": {"status": "unknown", "action": None},
     "availability": {profile_id: False for profile_id in PROFILE_IDS},
     "photos": [],
 }
@@ -439,6 +441,7 @@ def prepare_scene(source, destination, profile):
 def generate_npu(scene, output, profile, reference_path):
     model = profile["npu_model"]
     seed = profile["seed"]
+    set_accelerator_mode("local", model)
     payload = {
         "model": model,
         "prompt": profile["prompt"],
@@ -686,10 +689,81 @@ def print_description(description):
 
 
 def describe_scene(scene):
-    chunks = []
-    for chunk in vlm.chat_stream(message=VLM_PROMPT, images=[str(scene)]):
-        chunks.append(chunk)
-    return "".join(chunks).strip()
+    for attempt in range(2):
+        chunks = []
+        for chunk in vlm.chat_stream(message=VLM_PROMPT, images=[str(scene)]):
+            chunks.append(chunk)
+        description = "".join(chunks).strip()
+        if description:
+            return description
+        if attempt == 0:
+            logger.info("Local VLM returned an empty cold-start response; retrying")
+    return ""
+
+
+def set_accelerator_mode(mode, model="standard"):
+    parsed = urllib.parse.urlparse(config["npu_url"])
+    mode_url = urllib.parse.urlunparse(parsed._replace(path="/mode", query=""))
+    request = urllib.request.Request(
+        mode_url,
+        data=json.dumps({"mode": mode, "model": model}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        result = json.load(response)
+    if result.get("status") != "ready":
+        raise RuntimeError(f"Accelerator did not enter {mode} mode")
+
+
+def model_service_status():
+    try:
+        return request_model_service("status", timeout=5)
+    except (OSError, RuntimeError, socket.timeout):
+        return "unavailable"
+
+
+def model_service_worker(action, client):
+    try:
+        request_model_service(action)
+    except (OSError, RuntimeError, socket.timeout) as exc:
+        logger.error(f"Model service {action} failed: {exc}")
+        ui.send_message("service_error", {"message": str(exc)}, client)
+    finally:
+        with state_lock:
+            state["model_service"] = {
+                "status": model_service_status(),
+                "action": None,
+            }
+        refresh_availability()
+        ui.send_message("camera_state", snapshot_state())
+
+
+def on_model_service(client, data):
+    action = str((data or {}).get("action", "")).strip()
+    if action not in {"start", "stop"}:
+        ui.send_message("service_error", {"message": "Unknown model service action"}, client)
+        return
+    with state_lock:
+        if state["busy"]:
+            ui.send_message(
+                "service_error",
+                {"message": "Model service cannot change while a photo is processing"},
+                client,
+            )
+            return
+        if state["model_service"]["action"]:
+            return
+        state["model_service"] = {
+            "status": state["model_service"]["status"],
+            "action": f"{action}ing",
+        }
+    ui.send_message("camera_state", snapshot_state())
+    threading.Thread(
+        target=model_service_worker,
+        args=(action, client),
+        daemon=True,
+    ).start()
 
 
 def try_print_wifi_ticket(title, ssid="", psk="", message=""):
@@ -742,8 +816,14 @@ def process_capture(profile_id, profile, source="hardware"):
         prepare_scene(original, scene, profile)
         reference_path = profile_reference_path(profile_id)
         if mode == "describe":
-            publish("generating", "Describing the scene with the local VLM", True)
-            description = run_interruptibly(lambda: describe_scene(scene))
+            publish("generating", "Preparing the local VLM", True)
+            set_accelerator_mode("describe")
+            try:
+                publish("generating", "Describing the scene with the local VLM", True)
+                description = run_interruptibly(lambda: describe_scene(scene))
+            finally:
+                publish("generating", "Restoring the local image model", True)
+                set_accelerator_mode("local")
             check_cancelled()
             if not description:
                 raise RuntimeError("The local VLM returned an empty description")
@@ -1135,13 +1215,16 @@ def refresh_availability():
     camera_device = resolve_camera_device()
     camera_ready = camera_device is not None
     cloud_ready = bool(openrouter_api_key()) and endpoint_reachable("https://openrouter.ai", 1.5)
-    npu_models = available_npu_models()
+    service_status = model_service_status()
+    with state_lock:
+        service_action = state["model_service"]["action"]
+    npu_models = available_npu_models() if service_status == "active" and not service_action else set()
     availability = {}
     for profile_id, profile in config["button_profiles"].items():
         if profile["mode"] == "normal":
             availability[profile_id] = camera_ready
         elif profile["mode"] == "describe":
-            availability[profile_id] = camera_ready
+            availability[profile_id] = camera_ready and bool(npu_models)
         elif profile["mode"] == "cloud":
             availability[profile_id] = camera_ready and cloud_ready and profile_reference_path(profile_id).is_file()
         else:
@@ -1150,6 +1233,10 @@ def refresh_availability():
         changed = availability != state["availability"]
         state["availability"] = availability
         state["camera"] = camera_device or "USB webcam not connected"
+        state["model_service"] = {
+            "status": service_status,
+            "action": service_action,
+        }
     try:
         availability_mask = sum(
             (1 << index) for index, profile_id in enumerate(PROFILE_IDS)
@@ -1182,6 +1269,7 @@ ui.on_message("reprint", on_reprint)
 ui.on_message("get_state", on_get_state)
 ui.on_message("set_settings", on_set_settings)
 ui.on_message("set_reference", on_set_reference)
+ui.on_message("model_service", on_model_service)
 threading.Thread(target=worker, daemon=True).start()
 threading.Thread(target=availability_worker, daemon=True).start()
 App.run()

@@ -50,6 +50,9 @@ const printerHeatIntervalInput = document.querySelector('#printer-heat-interval'
 const printerDensityInput = document.querySelector('#printer-density');
 const printerBreakTimeInput = document.querySelector('#printer-break-time');
 const testPrint = document.querySelector('#test-print');
+const modelServiceStatus = document.querySelector('#model-service-status');
+const modelServiceToggle = document.querySelector('#model-service-toggle');
+const modelServiceMessage = document.querySelector('#model-service-message');
 const capture = document.querySelector('#capture');
 const profileButtons = [...document.querySelectorAll('.mode-button')];
 const modePanels = [...document.querySelectorAll('.mode-panel')];
@@ -68,7 +71,7 @@ let removeSavedOpenrouterKey = false;
 let isBusy = false;
 
 ui.on_connect(() => { connection.textContent = 'BOARD ONLINE'; connection.classList.add('online'); ui.send_message('get_state'); });
-ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; capture.disabled = true; profileButtons.forEach(button => { button.disabled = true; }); });
+ui.on_disconnect(() => { connection.textContent = 'DISCONNECTED'; connection.classList.remove('online'); shutter.disabled = true; capture.disabled = true; modelServiceToggle.disabled = true; profileButtons.forEach(button => { button.disabled = true; }); });
 ui.on_message('camera_state', render);
 ui.on_message('settings_error', ({ message: error }) => {
   pendingSettings = null;
@@ -76,6 +79,10 @@ ui.on_message('settings_error', ({ message: error }) => {
   settingsDirty = true;
   settingsStatus.textContent = error;
   settingsStatus.className = 'error';
+});
+ui.on_message('service_error', ({ message: error }) => {
+  modelServiceMessage.textContent = error;
+  modelServiceMessage.className = 'service-message error';
 });
 function requestSelectedCapture() {
   if (isBusy) {
@@ -93,6 +100,13 @@ shutter.addEventListener('click', requestSelectedCapture);
 capture.addEventListener('click', requestSelectedCapture);
 profileButtons.forEach(button => button.addEventListener('click', () => selectProfile(button.dataset.profileId)));
 testPrint.addEventListener('click', () => ui.send_message('test_print'));
+modelServiceToggle.addEventListener('click', () => {
+  const action = modelServiceToggle.dataset.action;
+  if (!action) return;
+  modelServiceMessage.textContent = '';
+  modelServiceMessage.className = 'service-message';
+  ui.send_message('model_service', { action });
+});
 settingsForm.addEventListener('input', () => { settingsDirty = true; settingsStatus.textContent = 'UNSAVED'; settingsStatus.className = ''; updateSettingOutputs(); });
 settingsForm.addEventListener('submit', event => {
   event.preventDefault();
@@ -213,6 +227,15 @@ function render(state) {
   modePanels.forEach(panel => { panel.disabled = state.busy || panel.hidden; });
   [...settingsForm.querySelectorAll('.common-panel')].forEach(panel => { panel.disabled = state.busy; });
   applySettings.disabled = state.busy;
+  const modelService = state.model_service || {};
+  const serviceAction = modelService.action;
+  const serviceActive = modelService.status === 'active';
+  const serviceControllable = ['active', 'inactive', 'failed'].includes(modelService.status);
+  modelServiceStatus.textContent = (serviceAction || modelService.status || 'unknown').toUpperCase();
+  modelServiceToggle.dataset.action = serviceActive ? 'stop' : 'start';
+  modelServiceToggle.textContent = serviceActive ? 'STOP MODEL SERVICE' : 'START MODEL SERVICE';
+  modelServiceToggle.disabled = state.busy || Boolean(serviceAction) || !serviceControllable;
+  if (!serviceAction && !modelServiceMessage.classList.contains('error')) modelServiceMessage.textContent = '';
   capture.disabled = state.busy || !availability[selectedProfileId];
   progress.classList.toggle('active', state.busy);
   if (state.busy && !startedAt) {

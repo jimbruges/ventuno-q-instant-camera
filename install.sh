@@ -88,6 +88,8 @@ install -m 0644 "$ai_source/systemd/instant-camera-npu.service" \
   "$user_units/instant-camera-npu.service"
 install -m 0644 "$app_target/tools/instant-camera-wifi.service" \
   "$user_units/instant-camera-wifi.service"
+install -m 0644 "$app_target/tools/instant-camera-model-control.service" \
+  "$user_units/instant-camera-model-control.service"
 systemctl --user daemon-reload
 
 if ! $start_services; then
@@ -96,6 +98,7 @@ if ! $start_services; then
 fi
 
 systemctl --user enable --now instant-camera-wifi.service
+systemctl --user enable --now instant-camera-model-control.service
 if [[ -f "$ai_target/models/qcs8275-ip-adapter-plus/adapter_unet/model.bin" ]]; then
   systemctl --user enable --now instant-camera-npu.service
   echo "Waiting for the local NPU endpoint..."
