@@ -10,6 +10,52 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
+GENIE_COMPOSE_PROJECT = "instant-me-camera"
+GENIE_SERVICE = "genie-models-runner"
+
+
+def genie_container_name():
+    result = subprocess.run(
+        [
+            "docker", "ps", "-a",
+            "--filter", f"label=com.docker.compose.project={GENIE_COMPOSE_PROJECT}",
+            "--filter", f"label=com.docker.compose.service={GENIE_SERVICE}",
+            "--format", "{{.Names}}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    names = result.stdout.split()
+    if len(names) != 1:
+        raise RuntimeError(f"expected one Genie container, found {len(names)}")
+    return names[0]
+
+
+def set_genie_running(running):
+    arguments = ["docker", "start" if running else "stop"]
+    if not running:
+        arguments.extend(["--time", "10"])
+    subprocess.run(
+        [*arguments, genie_container_name()],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if running:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen("http://127.0.0.1:9001/v1/health", timeout=1) as response:
+                    if response.status == 200:
+                        return
+            except (OSError, urllib.error.URLError):
+                pass
+            time.sleep(0.25)
+        raise TimeoutError("Genie service did not become ready")
+
+
 class ModelWorker:
     def __init__(self, variants, default_variant, worker_port):
         self.variants = variants
@@ -86,6 +132,9 @@ class RouterHandler(BaseHTTPRequestHandler):
         })
 
     def do_POST(self):
+        if self.path == "/mode":
+            self._set_mode()
+            return
         if self.path != "/edit":
             self.send_error(404)
             return
@@ -116,6 +165,24 @@ class RouterHandler(BaseHTTPRequestHandler):
                 {"error": exc.read().decode("utf-8", errors="replace")},
                 status=exc.code,
             )
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=500)
+
+    def _set_mode(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            request_data = json.loads(self.rfile.read(length))
+            mode = request_data.get("mode")
+            with self.server.model_lock:
+                if mode == "describe":
+                    self.server.worker.stop()
+                    set_genie_running(True)
+                elif mode == "local":
+                    set_genie_running(False)
+                    self.server.worker.select(request_data.get("model") or "standard")
+                else:
+                    raise ValueError("mode must be 'describe' or 'local'")
+            self._send_json({"status": "ready", "mode": mode})
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=500)
 
@@ -152,6 +219,10 @@ def main():
         variants[name] = path
     if args.default_variant not in variants:
         parser.error("--default-variant must name a configured variant")
+    try:
+        set_genie_running(False)
+    except Exception as exc:
+        print(f"Genie was not released during startup: {exc}", flush=True)
     worker = ModelWorker(variants, args.default_variant, args.worker_port)
     server = RouterServer((args.host, args.port), worker)
     print(f"NPU router ready at http://{args.host}:{args.port}", flush=True)
