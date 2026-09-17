@@ -817,13 +817,16 @@ def process_capture(profile_id, profile, source="hardware"):
         reference_path = profile_reference_path(profile_id)
         if mode == "describe":
             publish("generating", "Preparing the local VLM", True)
-            set_accelerator_mode("describe")
+            restore_image_model = model_service_status() == "active"
+            if restore_image_model:
+                set_accelerator_mode("describe")
             try:
                 publish("generating", "Describing the scene with the local VLM", True)
                 description = run_interruptibly(lambda: describe_scene(scene))
             finally:
-                publish("generating", "Restoring the local image model", True)
-                set_accelerator_mode("local")
+                if restore_image_model:
+                    publish("generating", "Restoring the local image model", True)
+                    set_accelerator_mode("local")
             check_cancelled()
             if not description:
                 raise RuntimeError("The local VLM returned an empty description")
@@ -1211,6 +1214,17 @@ def available_npu_models():
     return set()
 
 
+def genie_service_ready():
+    try:
+        with urllib.request.urlopen(
+            "http://genie-models-runner:9001/v1/health",
+            timeout=1.5,
+        ) as response:
+            return response.status == 200
+    except (OSError, urllib.error.URLError):
+        return False
+
+
 def refresh_availability():
     camera_device = resolve_camera_device()
     camera_ready = camera_device is not None
@@ -1219,12 +1233,13 @@ def refresh_availability():
     with state_lock:
         service_action = state["model_service"]["action"]
     npu_models = available_npu_models() if service_status == "active" and not service_action else set()
+    describe_ready = bool(npu_models) or genie_service_ready()
     availability = {}
     for profile_id, profile in config["button_profiles"].items():
         if profile["mode"] == "normal":
             availability[profile_id] = camera_ready
         elif profile["mode"] == "describe":
-            availability[profile_id] = camera_ready and bool(npu_models)
+            availability[profile_id] = camera_ready and describe_ready
         elif profile["mode"] == "cloud":
             availability[profile_id] = camera_ready and cloud_ready and profile_reference_path(profile_id).is_file()
         else:

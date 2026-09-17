@@ -3,12 +3,17 @@ import json
 import os
 import socket
 import subprocess
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
 APP_DIR = Path(__file__).resolve().parent.parent
 SOCKET_PATH = APP_DIR / ".model-service.sock"
 MODEL_SERVICE_UNIT = "instant-camera-npu.service"
+GENIE_COMPOSE_PROJECT = "instant-me-camera"
+GENIE_SERVICE = "genie-models-runner"
 
 
 def service_status():
@@ -20,6 +25,49 @@ def service_status():
         check=False,
     )
     return result.stdout.strip() or "unknown"
+
+
+def genie_container_name():
+    result = subprocess.run(
+        [
+            "docker", "ps", "-a",
+            "--filter", f"label=com.docker.compose.project={GENIE_COMPOSE_PROJECT}",
+            "--filter", f"label=com.docker.compose.service={GENIE_SERVICE}",
+            "--format", "{{.Names}}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    names = result.stdout.split()
+    if len(names) != 1:
+        raise RuntimeError(f"expected one Genie container, found {len(names)}")
+    return names[0]
+
+
+def wait_for_genie():
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:9001/v1/health", timeout=1) as response:
+                if response.status == 200:
+                    return
+        except (OSError, urllib.error.URLError):
+            pass
+        time.sleep(0.25)
+    raise TimeoutError("Genie service did not become ready")
+
+
+def start_app_service():
+    subprocess.run(
+        ["docker", "start", genie_container_name()],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    wait_for_genie()
 
 
 def control(request):
@@ -37,6 +85,8 @@ def control(request):
         if result.returncode:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(detail or "systemctl failed")
+        if action == "stop":
+            start_app_service()
         print(f"Model service {action} requested", flush=True)
     return {"ok": True, "status": service_status()}
 

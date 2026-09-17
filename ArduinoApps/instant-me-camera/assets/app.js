@@ -233,7 +233,7 @@ function render(state) {
   const serviceControllable = ['active', 'inactive', 'failed'].includes(modelService.status);
   modelServiceStatus.textContent = (serviceAction || modelService.status || 'unknown').toUpperCase();
   modelServiceToggle.dataset.action = serviceActive ? 'stop' : 'start';
-  modelServiceToggle.textContent = serviceActive ? 'STOP MODEL SERVICE' : 'START MODEL SERVICE';
+  modelServiceToggle.textContent = serviceActive ? 'STOP IMAGE MODEL' : 'START IMAGE MODEL';
   modelServiceToggle.disabled = state.busy || Boolean(serviceAction) || !serviceControllable;
   if (!serviceAction && !modelServiceMessage.classList.contains('error')) modelServiceMessage.textContent = '';
   capture.disabled = state.busy || !availability[selectedProfileId];
