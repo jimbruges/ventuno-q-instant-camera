@@ -1,6 +1,7 @@
 # Keep this repository focused on the camera App and custom pipeline source.
 /*
 !/.gitignore
+!/LICENSE
 !/README.md
 !/MODELS.md
 !/install.sh

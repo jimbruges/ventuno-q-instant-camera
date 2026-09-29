@@ -109,6 +109,17 @@ contexts.
 
 See [MODELS.md](MODELS.md) for artifact contents, upstream model licenses, and installation details.
 
+## License
+
+Original source code, documentation, and enclosure CAD files in this repository
+are available under the [Mozilla Public License 2.0](LICENSE), unless a file or
+directory includes a different notice. Third-party libraries, model artifacts,
+reference images, product images linked from the bill of materials, Arduino and
+Qualcomm components, and the trademarks shown in this project remain subject to
+their respective licenses and terms. See [MODELS.md](MODELS.md) and
+[huggingface/README.md](huggingface/README.md) for the local model licensing and
+provenance details.
+
 ## Repository layout
 
 - `ArduinoApps/instant-me-camera/`: App Lab application, MCU sketch, Web UI, and Wi-Fi helper.
