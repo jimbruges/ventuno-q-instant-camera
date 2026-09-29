@@ -37,6 +37,12 @@ The camera can run completely headless once it has been configured. Use the thre
 
 See the [hardware build guide](hardware/README.md) for assembly and wiring, and [the app README](ArduinoApps/instant-me-camera/README.md) for controls and operation.
 
+### Wiring diagram
+
+![VENTUNO Q Instant Camera wiring diagram](docs/images/ventuno-q-instant-camera-wiring.png)
+
+The diagram shows the USB-C PD power path, shared printer and board ground, USB webcam, serial printer connection, and Qwiic peripherals. Verify the PD trigger's 9 V output with a multimeter before connecting it, and do not power the thermal printer from the VENTUNO Q logic header.
+
 ### Bill of materials
 
 | Component | Quantity |
