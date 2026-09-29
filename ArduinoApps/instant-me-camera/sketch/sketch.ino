@@ -47,21 +47,22 @@ void setup() {
   Serial1.begin(9600);
   printer.begin();
   Bridge.begin();
-  Bridge.provide("camera_status", setCameraStatus);
-  Bridge.provide("capture_light", setCaptureLight);
-  Bridge.provide("print_begin", beginPrint);
-  Bridge.provide("print_rows", appendPrintRows);
-  Bridge.provide("print_end", endPrint);
-  Bridge.provide("print_cancel", cancelPrint);
-  Bridge.provide("print_configure", configurePrinter);
-  Bridge.provide("print_test", testPrint);
-  Bridge.provide("print_wifi_ticket", printWifiTicket);
+  // provide_safe runs handlers in loop() context so they never race loop()'s I2C/matrix/printer access.
+  Bridge.provide_safe("camera_status", setCameraStatus);
+  Bridge.provide_safe("capture_light", setCaptureLight);
+  Bridge.provide_safe("print_begin", beginPrint);
+  Bridge.provide_safe("print_rows", appendPrintRows);
+  Bridge.provide_safe("print_end", endPrint);
+  Bridge.provide_safe("print_cancel", cancelPrint);
+  Bridge.provide_safe("print_configure", configurePrinter);
+  Bridge.provide_safe("print_test", testPrint);
+  Bridge.provide_safe("print_wifi_ticket", printWifiTicket);
   Modulino.begin(Wire1);
   buttons.begin();
   pixels.begin();
   pixels.show();
-  Bridge.provide("set_active_mode", setActiveMode);
-  Bridge.provide("set_options", setOptions);
+  Bridge.provide_safe("set_active_mode", setActiveMode);
+  Bridge.provide_safe("set_options", setOptions);
   drawState();
   updateControls();
 }
