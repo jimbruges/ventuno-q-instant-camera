@@ -8,6 +8,10 @@
 !/huggingface/**
 !/scripts/
 !/scripts/**
+!/hardware/
+!/hardware/**
+!/docs/
+!/docs/**
 
 !/ArduinoApps/
 /ArduinoApps/*

@@ -1,5 +1,7 @@
 # VENTUNO Q Instant Camera
 
+![VENTUNO Q Rubber Duck Camera](docs/images/header.png)
+
 A headless instant-camera photobooth for Arduino VENTUNO Q. It combines a USB webcam, Modulino Buttons and Pixels, the onboard LED matrix, a serial thermal printer, and optional local NPU or cloud image editing.
 
 ## What it does
@@ -18,6 +20,20 @@ A headless instant-camera photobooth for Arduino VENTUNO Q. It combines a USB we
 - TTL thermal printer on D1/TX at 9600 baud, powered from a separate suitable supply with common ground.
 
 See [the app README](ArduinoApps/instant-me-camera/README.md) for controls and detailed printer wiring.
+
+## 3D-printed enclosure
+
+The camera ships in a three-part enclosure sized around the VENTUNO Q, webcam, thermal printer, and Modulino buttons: a top shell with the carry handle and button/lens cutouts, a bottom shell with a printer bay, and a vented side panel for airflow around the board.
+
+| Front cutouts | Vented side panel | Interior shell |
+| --- | --- | --- |
+| ![Front panel with lens, button, and printer cutouts](docs/images/case-cad-front.png) | ![Side panel with ventilation slots and carry handle](docs/images/case-cad-side-vents.png) | ![Interior view of the printed shell](docs/images/case-cad-isometric.png) |
+
+All three parts print without supports; the print layout below splits them across two plates:
+
+![Slicer plate layout for the lid, body, and side panel](docs/images/case-print-plates.png)
+
+The editable CAD source is in [hardware/ventuno-q-instant-camera.3mf](hardware/ventuno-q-instant-camera.3mf) (Fusion 360 / PrusaSlicer compatible).
 
 ## Install on a VENTUNO Q
 
@@ -83,6 +99,8 @@ See [MODELS.md](MODELS.md) for artifact contents, upstream model licenses, optio
 - `instant-camera-ai/systemd/`: user service template.
 - `scripts/install-models.sh`: release artifact downloader and verifier.
 - `install.sh`: complete board installer.
+- `hardware/`: 3D-printable enclosure source (`.3mf`).
+- `docs/images/`: README screenshots and renders.
 
 ## Operations
 
