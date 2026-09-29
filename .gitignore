@@ -13,6 +13,7 @@
 !/hardware/**
 !/docs/
 !/docs/**
+/docs/project-hub-draft.md
 
 !/ArduinoApps/
 /ArduinoApps/*
