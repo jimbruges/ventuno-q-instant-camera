@@ -6,8 +6,6 @@ A headless instant-camera photobooth for the Arduino VENTUNO Q. It combines a US
 
 > [Watch the build video on YouTube](https://www.youtube.com/shorts/uCNsJqf2ZmI)
 
-This is a modern return to an instant camera I made as a teenager. The original used a receipt printer because thermal paper made it cheap enough to hand photos out at parties. More than a decade later, the VENTUNO Q makes it possible to build the hardware in a week and add local image editing without sending a photo to the cloud.
-
 ## Start here
 
 1. Read the [hardware build guide](hardware/README.md) to print the case, assemble the camera, and wire the printer safely.
