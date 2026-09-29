@@ -4,13 +4,31 @@
 
 A headless instant-camera photobooth for the Arduino VENTUNO Q. It combines a USB webcam, Modulino Buttons and Pixels, the onboard LED matrix, a serial thermal printer, local VLM descriptions, and optional local NPU or cloud image editing.
 
+> [Watch the build video on YouTube](https://www.youtube.com/shorts/uCNsJqf2ZmI)
+
+This is a modern return to an instant camera I made as a teenager. The original used a receipt printer because thermal paper made it cheap enough to hand photos out at parties. More than a decade later, the VENTUNO Q makes it possible to build the hardware in a week and add local image editing without sending a photo to the cloud.
+
+## Start here
+
+1. Read the [hardware build guide](hardware/README.md) to print the case, assemble the camera, and wire the printer safely.
+2. Run [`./install.sh`](#install-on-a-ventuno-q) on a VENTUNO Q to install the application and optional local image-editing bundle.
+3. Open the browser interface at `http://<board-ip>:7000` to configure the button profiles and make a test print.
+
+The camera can run completely headless once it has been configured. Use the three Modulino Buttons as the shutter controls, while the Modulino Pixels and the VENTUNO Q LED matrix provide flash and status feedback.
+
 ## What it does
 
-- Six configurable short/long button profiles across Normal, Local NPU, Cloud, and Describe modes.
-- Captures, edits, archives, and prints 384-dot monochrome receipts.
-- Provides a browser UI on port 7000 for configuration, previews, test prints, and history.
-- Provisions Wi-Fi from an Android sharing QR code without a display.
-- Runs the local editor through QNN/HTP contexts compiled for the VENTUNO Q QCS8275.
+| Mode | Result |
+| --- | --- |
+| Normal | Captures the webcam image and prints it as a 384-dot monochrome receipt. |
+| Local | Uses the VENTUNO Q NPU to edit the image locally. The default prompt replaces people's heads with rubber ducks. |
+| Cloud | Sends an image-edit request through OpenRouter; this mode requires an API key and network access. |
+| Describe | Uses the built-in local VLM to describe the scene and prints the text instead of a photo. |
+
+- Six independently configurable profiles: a short press and a long press for each of the three buttons.
+- A browser UI on port 7000 for configuration, live previews, test prints, and recent-print history.
+- Screenless Android Wi-Fi setup by scanning a Wi-Fi sharing QR code with the webcam.
+- Local image editing through QNN/HTP contexts compiled for the VENTUNO Q QCS8275.
 
 ## Hardware
 
@@ -54,7 +72,7 @@ Use this layout for printing; supports are required for the front plate:
 
 Download the [3MF enclosure file](hardware/ventuno-q-instant-camera.3mf) for all three parts. See the [hardware build guide](hardware/README.md) for the assembly sequence.
 
-Tested on a Prusa Core One+
+Tested on a Prusa Core One+.
 
 ## Install on a VENTUNO Q
 
@@ -88,6 +106,8 @@ Useful alternatives:
 ```
 
 The installer preserves runtime `config.json`, `.secrets.json`, captures, and profile photos on upgrades.
+
+> **Want the fastest first print?** Run `./install.sh --skip-models` to install Normal, Cloud, and Describe modes without the multi-gigabyte local editor. You can add Local mode later with `./scripts/install-models.sh`.
 
 ## Configuration
 
