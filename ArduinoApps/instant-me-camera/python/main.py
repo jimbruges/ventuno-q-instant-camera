@@ -28,7 +28,6 @@ from wifi_setup import connect_wifi, scan_wifi_qr
 APP_DIR = Path(__file__).resolve().parent.parent
 ASSETS_DIR = APP_DIR / "assets"
 CAPTURES_DIR = ASSETS_DIR / "captures"
-REFERENCE_PATH = ASSETS_DIR / "reference" / "me.jpg"
 NPU_REFERENCE_PATH = ASSETS_DIR / "reference" / "object.jpg"
 PROFILE_REFERENCE_DIR = ASSETS_DIR / "reference" / "profiles"
 CONFIG_PATH = APP_DIR / "config.json"
@@ -110,10 +109,6 @@ def load_config():
         "npu_seed": None,
         "npu_model": "standard",
         "cloud_prompt": os.getenv("CLOUD_PROMPT", DEFAULT_CLOUD_PROMPT),
-        "identity_prompt": os.getenv("IDENTITY_PROMPT", "candid instant camera photograph, a man img naturally joining the people in the scene"),
-        "sd_cli": os.getenv("SD_CLI", str(Path.home() / "instant-camera-ai" / "bin" / "sd-cli")),
-        "photo_maker": os.getenv("PHOTO_MAKER_MODEL", str(Path.home() / "instant-camera-ai" / "models" / "photomaker-v1.safetensors")),
-        "identity_model": os.getenv("IDENTITY_MODEL", str(Path.home() / "instant-camera-ai" / "models" / "sdxl-lightning.safetensors")),
         "generation_width": int(os.getenv("GENERATION_WIDTH", "384")),
         "generation_steps": int(os.getenv("GENERATION_STEPS", "4")),
         "generation_strength": float(os.getenv("GENERATION_STRENGTH", "0.78")),
@@ -194,7 +189,7 @@ def migrate_profile_references():
         return
     PROFILE_REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
     for profile_id, profile in config["button_profiles"].items():
-        legacy_path = REFERENCE_PATH if profile["mode"] == "cloud" else NPU_REFERENCE_PATH
+        legacy_path = NPU_REFERENCE_PATH
         if profile["mode"] != "normal" and legacy_path.is_file():
             shutil.copyfile(legacy_path, profile_reference_path(profile_id))
 
@@ -275,8 +270,6 @@ def snapshot_state():
         result["openrouter_key_ready"] = bool(saved_key or os.getenv("OPENROUTER_API_KEY"))
         result["openrouter_key_source"] = "saved" if saved_key else "environment" if os.getenv("OPENROUTER_API_KEY") else None
         required = []
-        if config["backend"] == "identity":
-            required.extend([config["sd_cli"], config["identity_model"], config["photo_maker"]])
         result["local_ready"] = all(Path(path).is_file() for path in required)
         return result
 
@@ -472,38 +465,6 @@ def generate_npu(scene, output, profile, reference_path):
         raise RuntimeError(f"NPU service failed ({exc.code}): {detail}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"NPU service is unavailable: {exc.reason}") from exc
-
-
-def generate_identity(scene, output):
-    identity_dir = REFERENCE_PATH.parent
-    with Image.open(scene) as scene_image:
-        width, height = scene_image.size
-    command = [
-        config["sd_cli"], "-m", config["identity_model"],
-        "--photo-maker", config["photo_maker"],
-        "--pm-id-images-dir", str(identity_dir),
-        "--pm-style-strength", "10",
-        "--init-img", str(scene), "--strength", "0.72",
-        "--prompt", config["identity_prompt"],
-        "--negative-prompt", "color, text, watermark, malformed face, duplicate person",
-        "--width", str(width), "--height", str(height),
-        "--steps", "4", "--cfg-scale", "1.0", "--sampling-method", "euler",
-        "--threads", "8", "--vae-tiling", "--output", str(output),
-    ]
-    process = subprocess.Popen(command)
-    try:
-        deadline = time.monotonic() + 600
-        while process.poll() is None:
-            check_cancelled()
-            if time.monotonic() >= deadline:
-                raise subprocess.TimeoutExpired(command, 600)
-            time.sleep(0.1)
-        if process.returncode:
-            raise subprocess.CalledProcessError(process.returncode, command)
-    except BaseException:
-        if process.poll() is None:
-            process.terminate()
-        raise
 
 
 def _read_url(request, timeout):
@@ -725,7 +686,15 @@ def model_service_status():
 
 def model_service_worker(action, client):
     try:
-        request_model_service(action)
+        status = request_model_service(action)
+        if action == "shutdown":
+            with state_lock:
+                state["model_service"] = {
+                    "status": status,
+                    "action": "shutting down",
+                }
+            ui.send_message("camera_state", snapshot_state())
+            return
     except (OSError, RuntimeError, socket.timeout) as exc:
         logger.error(f"Model service {action} failed: {exc}")
         ui.send_message("service_error", {"message": str(exc)}, client)
@@ -741,7 +710,7 @@ def model_service_worker(action, client):
 
 def on_model_service(client, data):
     action = str((data or {}).get("action", "")).strip()
-    if action not in {"start", "stop"}:
+    if action != "shutdown":
         ui.send_message("service_error", {"message": "Unknown model service action"}, client)
         return
     with state_lock:
@@ -756,7 +725,7 @@ def on_model_service(client, data):
             return
         state["model_service"] = {
             "status": state["model_service"]["status"],
-            "action": f"{action}ing",
+            "action": "shutting down",
         }
     ui.send_message("camera_state", snapshot_state())
     threading.Thread(

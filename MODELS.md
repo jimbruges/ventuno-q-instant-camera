@@ -2,8 +2,6 @@
 
 ## Why models are release assets
 
-The development board contains roughly 23 GB of model experiments. Committing those files to Git would make every clone enormous and exceeds GitHub's 100 MB file limit. Git LFS would still transfer all selected objects and consume LFS storage/bandwidth.
-
 The supported installation pins a minimal VENTUNO Q bundle to the immutable `v1`
 tag of the public Hugging Face model repository
 `jimbruges/ventuno-q-instant-camera-models`. `scripts/install-models.sh`
@@ -89,19 +87,6 @@ the canonical home-relative location installed by `install.sh`.
 
 No Hugging Face account or CLI is required to install the public bundle; downloads
 use HTTPS and `curl`.
-
-## Rebuilding
-
-The export sources are in `instant-camera-ai/src/`. Rebuilding requires a Linux development machine with PyTorch, Diffusers, ONNX, a Hugging Face connection, and a Qualcomm AI Hub account/API token. The main entry points are:
-
-```bash
-python instant-camera-ai/src/export_instruct_pix2pix.py all
-python instant-camera-ai/src/export_ip_adapter_pix2pix.py prepare
-```
-
-Compilation jobs target the `Arduino VENTUNO Q` device through Qualcomm AI Hub. Downloaded job outputs must be arranged in the installed layout above. Export environments and source checkpoints are intentionally excluded from Git because they are large build inputs, not board runtime dependencies.
-
-Optional CPU, identity, ControlNet, and batched experiments are not part of the default bundle. They are not required for Normal, Cloud, or the supported Standard NPU mode.
 
 Maintainers can assemble a replacement release directly from a prepared VENTUNO Q
 without retaining duplicate archives:

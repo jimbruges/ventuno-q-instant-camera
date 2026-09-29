@@ -3,17 +3,22 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 
 APP_DIR = Path(__file__).resolve().parent.parent
 SOCKET_PATH = APP_DIR / ".model-service.sock"
 MODEL_SERVICE_UNIT = "instant-camera-npu.service"
-GENIE_COMPOSE_PROJECT = "instant-me-camera"
-GENIE_SERVICE = "genie-models-runner"
+ASSOCIATED_SERVICES = (
+    MODEL_SERVICE_UNIT,
+    "instant-camera-wifi.service",
+)
+ASSOCIATED_APPS = (
+    Path.home() / "ArduinoApps" / "instant-me-camera",
+    Path.home() / "ArduinoApps" / "instant-camera",
+)
 
 
 def service_status():
@@ -27,67 +32,46 @@ def service_status():
     return result.stdout.strip() or "unknown"
 
 
-def genie_container_name():
-    result = subprocess.run(
-        [
-            "docker", "ps", "-a",
-            "--filter", f"label=com.docker.compose.project={GENIE_COMPOSE_PROJECT}",
-            "--filter", f"label=com.docker.compose.service={GENIE_SERVICE}",
-            "--format", "{{.Names}}",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    names = result.stdout.split()
-    if len(names) != 1:
-        raise RuntimeError(f"expected one Genie container, found {len(names)}")
-    return names[0]
-
-
-def wait_for_genie():
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen("http://127.0.0.1:9001/v1/health", timeout=1) as response:
-                if response.status == 200:
-                    return
-        except (OSError, urllib.error.URLError):
-            pass
-        time.sleep(0.25)
-    raise TimeoutError("Genie service did not become ready")
-
-
-def start_app_service():
+def run_shutdown():
+    time.sleep(1)
     subprocess.run(
-        ["docker", "start", genie_container_name()],
-        check=True,
+        ["systemctl", "--user", "stop", *ASSOCIATED_SERVICES],
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
-    wait_for_genie()
+    for app_path in ASSOCIATED_APPS:
+        if app_path.is_dir():
+            subprocess.run(
+                ["arduino-app-cli", "app", "stop", str(app_path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+    subprocess.run(
+        ["systemctl", "--user", "stop", "instant-camera-model-control.service"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
 
 
 def control(request):
     action = request.get("action")
-    if action not in {"status", "start", "stop"}:
+    if action not in {"status", "shutdown"}:
         raise ValueError("Unknown model service action")
-    if action != "status":
-        result = subprocess.run(
-            ["systemctl", "--user", action, MODEL_SERVICE_UNIT],
-            capture_output=True,
-            text=True,
-            timeout=130,
-            check=False,
+    if action == "shutdown":
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--shutdown"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        if result.returncode:
-            detail = result.stderr.strip() or result.stdout.strip()
-            raise RuntimeError(detail or "systemctl failed")
-        if action == "stop":
-            start_app_service()
-        print(f"Model service {action} requested", flush=True)
+        print("Application shutdown requested", flush=True)
+        return {"ok": True, "status": "shutting_down"}
     return {"ok": True, "status": service_status()}
 
 
@@ -111,6 +95,9 @@ def handle(connection):
 
 
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "--shutdown":
+        run_shutdown()
+        return
     SOCKET_PATH.unlink(missing_ok=True)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
         server.bind(str(SOCKET_PATH))

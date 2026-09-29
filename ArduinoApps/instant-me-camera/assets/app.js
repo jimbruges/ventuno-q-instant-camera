@@ -101,11 +101,11 @@ capture.addEventListener('click', requestSelectedCapture);
 profileButtons.forEach(button => button.addEventListener('click', () => selectProfile(button.dataset.profileId)));
 testPrint.addEventListener('click', () => ui.send_message('test_print'));
 modelServiceToggle.addEventListener('click', () => {
-  const action = modelServiceToggle.dataset.action;
-  if (!action) return;
+  const confirmed = window.confirm('Shut down Instant Me Camera? This stops its App Lab app, local models, and helper services. This page will disconnect. To restore everything, rerun the installer or restart the helper services and App Lab app manually.');
+  if (!confirmed) return;
   modelServiceMessage.textContent = '';
   modelServiceMessage.className = 'service-message';
-  ui.send_message('model_service', { action });
+  ui.send_message('model_service', { action: 'shutdown' });
 });
 settingsForm.addEventListener('input', () => { settingsDirty = true; settingsStatus.textContent = 'UNSAVED'; settingsStatus.className = ''; updateSettingOutputs(); });
 settingsForm.addEventListener('submit', event => {
@@ -229,12 +229,9 @@ function render(state) {
   applySettings.disabled = state.busy;
   const modelService = state.model_service || {};
   const serviceAction = modelService.action;
-  const serviceActive = modelService.status === 'active';
-  const serviceControllable = ['active', 'inactive', 'failed'].includes(modelService.status);
   modelServiceStatus.textContent = (serviceAction || modelService.status || 'unknown').toUpperCase();
-  modelServiceToggle.dataset.action = serviceActive ? 'stop' : 'start';
-  modelServiceToggle.textContent = serviceActive ? 'STOP IMAGE MODEL' : 'START IMAGE MODEL';
-  modelServiceToggle.disabled = state.busy || Boolean(serviceAction) || !serviceControllable;
+  modelServiceToggle.textContent = serviceAction ? 'SHUTTING DOWN' : 'SHUT DOWN APPLICATION';
+  modelServiceToggle.disabled = state.busy || Boolean(serviceAction) || modelService.status === 'unavailable';
   if (!serviceAction && !modelServiceMessage.classList.contains('error')) modelServiceMessage.textContent = '';
   capture.disabled = state.busy || !availability[selectedProfileId];
   progress.classList.toggle('active', state.busy);

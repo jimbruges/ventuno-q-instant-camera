@@ -20,7 +20,7 @@ This repository contains checksummed ARM64 Python runtime archives and Qualcomm 
 
 ## Install
 
-Use the installer from the source repository:
+From a clone of the source repository, run:
 
 ```bash
 ./scripts/install-models.sh

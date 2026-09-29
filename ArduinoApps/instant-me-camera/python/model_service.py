@@ -7,7 +7,7 @@ SOCKET_PATH = Path("/app/.model-service.sock")
 
 
 def request_model_service(action, socket_path=SOCKET_PATH, timeout=135):
-    if action not in {"status", "start", "stop"}:
+    if action not in {"status", "shutdown"}:
         raise ValueError("Unknown model service action")
     request = json.dumps({"action": action}).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:

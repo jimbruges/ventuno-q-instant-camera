@@ -38,7 +38,6 @@
     "c_long": { "mode": "local" }
   },
   "cloud_prompt": "Place the person from the second reference image naturally into the scene in the first image. Keep their face, body, clothes, and identity recognizable. If people are present, pose them together; otherwise place the person naturally in the background. Preserve the scene, lighting, camera angle, and realistic photographic style.",
-  "identity_prompt": "candid instant camera photograph, a man img naturally joining the people in the scene",
   "generation_width": 384,
   "generation_steps": 4,
   "generation_strength": 0.78,

@@ -32,7 +32,7 @@ The scan timeout defaults to 120 seconds and can be overridden with `WIFI_SCAN_T
 
 ## Startup
 
-`VENTUNO Q AI Camera` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. The Web UI uses the owner-only `.model-service.sock` host helper to stop this image service and start it again later. Stopping it releases the image model, restores the App-managed Genie service, and leaves Normal, Cloud, and Describe available while Local is disabled. Genie has no independent unload API and must remain running for App Lab to consider this VLM-enabled app active.
+`VENTUNO Q AI Camera` is configured as the App CLI default and starts automatically when the board boots. The local Standard NPU model is managed by the enabled `instant-camera-npu.service` user service in `~/.config/systemd/user/`; user lingering keeps that service active without an interactive login. The Web UI's confirmed **Shut Down Application** action stops the App Lab application, its App-managed Genie model, the NPU image service, and its Wi-Fi and model-control helpers. The Web UI disconnects when shutdown completes; restart the application and helpers from App Lab or rerun the installer.
 
 ## Thermal printer wiring
 
@@ -42,6 +42,8 @@ The printer is driven at 9600 baud (8-N-1) through `Serial1`:
 - VENTUNO Q GND to printer GND.
 - Printer power to a separate regulated 5-9 V supply rated for at least 1.5 A.
 - Keep printer TX disconnected. If status receive is added later, level-shift it from 5 V to 3.3 V before connecting to VENTUNO Q D0 / RX.
+
+For the enclosure build, the printer is powered from the USB-C PD trigger's switched 9 V output. The trigger is fed through the panel-mount USB-C cable from the Anker power bank; its second output pair supplies the VENTUNO Q 5-24 V and GND screw terminals.
 
 Never power the printer from the board's 3.3 V or 5 V logic header. The external supply and VENTUNO Q must share ground. Start with the default heat and density values; overly aggressive settings increase current demand and can overheat the print head.
 
@@ -55,14 +57,14 @@ The Linux app converts each result to a 384-dot, one-bit raster and sends up to 
 4. Use **Test Print** in the Web UI before enabling print-after-capture.
 5. Trigger A, then C, then B after configuring `OPENROUTER_API_KEY` in Brick Configuration.
 
-The build and mocked transport tests do not energize the printer. A real test print requires the physical wiring above.
+A real test print requires the physical wiring above.
 
-## Backends
+## Image modes
 
-- `npu`: the default, using FP16 InstructPix2Pix and IP-Adapter Plus on the VENTUNO Q HTP/NPU. It accepts a captured image, an optional reference image, and a flexible instruction, with no user-supplied mask or manual compositing.
-- `identity`: the slower original mode, using SDXL, PhotoMaker v1, and `assets/reference/me.jpg`.
-- `openrouter`: OpenRouter's image editing API. Set its API key in Cloud settings in the Web UI, or provide `OPENROUTER_API_KEY` through App Lab Brick Configuration.
-- `preview`: deterministic local composite for testing capture, hardware, and UI without model weights.
+- `normal`: prints the captured image without AI editing.
+- `local`: the default rubber-duck effect, using FP16 InstructPix2Pix and IP-Adapter Plus on the VENTUNO Q HTP/NPU. It accepts a captured image, an optional reference image, and a flexible instruction.
+- `cloud`: OpenRouter's image editing API. Set its API key in Cloud settings in the Web UI, or provide `OPENROUTER_API_KEY` through App Lab Brick Configuration.
+- `describe`: sends the captured image to the local VLM and prints a short description instead of an image.
 
 Copy `config.example.json` to `config.json` to override defaults. `config.json` is optional. Settings include the NPU and cloud prompts, OpenRouter model, camera brightness/contrast, print enable, raster threshold, paper feed, heat dots/time/interval, density, and break time. A key entered in the Web UI is stored separately in ignored `.secrets.json` with owner-only permissions and is never returned to the browser; a blank key field preserves it.
 
@@ -79,18 +81,12 @@ The local model files are intentionally outside the App directory under `~/insta
 - `~/instant-camera-ai/models/qcs8275-sd15`: Qualcomm's precompiled QCS8275 Stable Diffusion 1.5 model contexts.
 - `~/instant-camera-ai/models/qcs8275-instruct-pix2pix`: custom FP16 QNN VAE encoder and eight-channel editor U-Net contexts.
 - `~/instant-camera-ai/models/qcs8275-ip-adapter-plus`: custom FP16 QNN CLIP Vision reference encoder and IP-Adapter-aware editor U-Net contexts.
-- `~/instant-camera-ai/bin/sd-cli`: ARM64 CPU build of `stable-diffusion.cpp`.
-- `~/instant-camera-ai/models/realistic-vision-v5.1.safetensors`: compact SD 1.5 base model.
-- `~/instant-camera-ai/models/sdxl-lightning.safetensors`: DreamShaper XL Lightning.
-- `~/instant-camera-ai/models/photomaker-v1.safetensors`: PhotoMaker v1 identity adapter.
 - `tools/ffmpeg`: bundled static ARM64 webcam capture binary.
 
-The NPU editor uses 20 Euler ancestral steps with separate text and image guidance. A verified 512x512 edit completed in 25.2 seconds. Warm component timings were 310 ms for source encoding and about 400 ms for each editor U-Net pass; each step performs three U-Net passes. The identity profile took about six minutes with an 8.1 GiB peak.
+The NPU editor uses 20 Euler ancestral steps with separate text and image guidance. A verified 512x512 edit completed in 25.2 seconds. Warm component timings were 310 ms for source encoding and about 400 ms for each editor U-Net pass; each step performs three U-Net passes.
 
-GenieX is not used because its public runtime supports LLM and VLM inference rather than Stable Diffusion graphs. This backend uses Qualcomm's dedicated QNN Stable Diffusion export and `/dev/fastrpc-cdsp` directly through ONNX Runtime QNN.
+The local image backend uses Qualcomm's dedicated QNN Stable Diffusion contexts and `/dev/fastrpc-cdsp` directly through ONNX Runtime QNN.
 
 Preprocessing preserves the webcam frame's native aspect ratio without padding, borders, or destructive center crops. Captures are not rotated by default; set `camera_rotation` to `90`, `-90`, or `180` only if the camera is mounted differently.
 
-The Vulkan build detects the Adreno623, but Mesa Turnip rejects a generated compute shader because its workgroup barrier cannot schedule enough concurrent waves. The verified QNN backend avoids that Vulkan path.
-
-The camera roll includes deterministic preview fixtures and outputs produced by the installed local models. OpenRouter support accepts either `message.images` or image items in the response content array.
+OpenRouter support accepts either `message.images` or image items in the response content array.
